@@ -1,0 +1,129 @@
+import binascii
+
+def feistel_round(left, right, round_key):
+    # Простая функция F 
+    def f_function(data, key):
+        return ((data << 3) ^ (key >> 2) ^ (data + key)) & 0xFFFFFFFF
+
+    new_left = right
+    new_right = left ^ f_function(right, round_key)
+
+    return new_left, new_right
+
+
+def feistel_encrypt(block, keys):
+    left = (block >> 32) & 0xFFFFFFFF
+    right = block & 0xFFFFFFFF
+    # Применяем все раунды
+    for round_key in keys:
+        left, right = feistel_round(left, right, round_key)
+    # Финальная перестановка (меняем половины местами)
+    encrypted_block = (right << 32) | left
+    return encrypted_block
+
+
+def feistel_decrypt(block, keys):
+    left = (block >> 32) & 0xFFFFFFFF
+    right = block & 0xFFFFFFFF
+    # Применяем раунды в обратном порядке
+    for round_key in reversed(keys):
+        left, right = feistel_round(left, right, round_key)
+    # Финальная перестановка
+    decrypted_block = (right << 32) | left
+    return decrypted_block
+
+
+def text_to_blocks(text, block_size=8):
+    # Преобразование текста в блоки
+    # Конвертируем текст в байты
+    text_bytes = text.encode('utf-8')
+    # Дополняем до кратного размера блока
+    padding_length = block_size - (len(text_bytes) % block_size)
+    if padding_length != block_size:
+        text_bytes += b'\x00' * padding_length
+    # Разбиваем на блоки
+    blocks = []
+    for i in range(0, len(text_bytes), block_size):
+        block = int.from_bytes(text_bytes[i:i + block_size], 'big')
+        blocks.append(block)
+    return blocks, padding_length
+
+
+def blocks_to_text(blocks, padding_length, block_size=8):
+    # Преобразование блоков обратно в текст
+    text_bytes = b''
+    for block in blocks:
+        block_bytes = block.to_bytes(block_size, 'big')
+        text_bytes += block_bytes
+    # Убираем дополнение
+    if padding_length != block_size:
+        text_bytes = text_bytes[:-padding_length]
+    return text_bytes.decode('utf-8')
+
+
+def feistel_encrypt_text(text, keys):
+    # Шифрование текста
+    blocks, padding_length = text_to_blocks(text)
+    encrypted_blocks = []
+    for block in blocks:
+        encrypted_block = feistel_encrypt(block, keys)
+        encrypted_blocks.append(encrypted_block)
+    return encrypted_blocks, padding_length
+
+
+def feistel_decrypt_text(encrypted_blocks, padding_length, keys):
+    # Дешифрование текста
+    decrypted_blocks = []
+    for block in encrypted_blocks:
+        decrypted_block = feistel_decrypt(block, keys)
+        decrypted_blocks.append(decrypted_block)
+    return blocks_to_text(decrypted_blocks, padding_length)
+
+
+# Генерация ключей для раундов
+def generate_round_keys(master_key, num_rounds=16):
+    # Генерация раундовых ключей из мастер-ключа
+    keys = []
+    for i in range(num_rounds):
+        # Простая генерация ключей (можно улучшить)
+        round_key = (master_key + i * 0x9E3779B9) & 0xFFFFFFFF
+        keys.append(round_key)
+    return keys
+
+
+# Основная программа
+if __name__ == "__main__":
+    # Исходное сообщение
+    message = "Реальность — иллюзия, вселенная — голограмма, скупай золото"
+    # Мастер-ключ (можно изменить)
+    master_key = 0x2B7E1516
+    num_rounds = 16
+    # Генерация раундовых ключей
+    round_keys = generate_round_keys(master_key, num_rounds)
+    print("Исходное сообщение:")
+    print(f"'{message}'")
+    print(f"Длина: {len(message)} символов")
+    print()
+    # Шифрование
+    encrypted_blocks, padding_length = feistel_encrypt_text(message, round_keys)
+    print("Зашифрованные блоки (в шестнадцатеричном формате):")
+    for i, block in enumerate(encrypted_blocks):
+        print(f"Блок {i + 1}: {hex(block)}")
+    print()
+    # Дешифрование
+    decrypted_message = feistel_decrypt_text(encrypted_blocks, padding_length, round_keys)
+    print("Расшифрованное сообщение:")
+    print(f"'{decrypted_message}'")
+    print()
+    # Проверка
+    if message == decrypted_message:
+        print("✅ Шифрование и дешифрование прошли успешно! Сообщения совпадают.")
+    else:
+        print("❌ Ошибка! Сообщения не совпадают.")
+    # Дополнительная информация
+    print("\n" + "=" * 50)
+    print("Дополнительная информация:")
+    print(f"Количество блоков: {len(encrypted_blocks)}")
+    print(f"Количество раундов: {num_rounds}")
+    print(f"Мастер-ключ: {hex(master_key)}")
+    print(f"Размер блока: 64 бита (8 байт)")
