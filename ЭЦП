@@ -1,0 +1,71 @@
+import random
+
+class DigitalSignature:
+    def __init__(self):
+        self.hasher = AdvancedHash(256)  # Используем нашу улучшенную хэш-функцию
+    
+    def generate_keys(self):
+        """Генерация ключевой пары"""
+        private_key = random.getrandbits(256)
+        public_key = self.hasher.hash(str(private_key).encode())[:16]  # Упрощенное преобразование
+        public_key = int.from_bytes(public_key, 'big')
+        return private_key, public_key
+    
+    def sign(self, message, private_key):
+        """Создание подписи"""
+        # Хешируем сообщение
+        message_hash = self.hasher.hash(message)
+        hash_int = int.from_bytes(message_hash[:8], 'big')
+        
+        # Создаем подпись
+        signature = (hash_int * private_key) & 0xFFFFFFFFFFFFFFFF
+        
+        return signature
+    
+    def verify(self, message, signature, public_key):
+        """Проверка подписи"""
+        # Хешируем сообщение
+        message_hash = self.hasher.hash(message)
+        hash_int = int.from_bytes(message_hash[:8], 'big')
+        
+        # Проверяем подпись
+        expected = (hash_int * public_key) & 0xFFFFFFFFFFFFFFFF
+        
+        return signature == expected
+
+def test_digital_signature():
+    print("=== Тестирование ЭЦП ===")
+    ds = DigitalSignature()
+    
+    # Генерация ключей
+    private_key, public_key = ds.generate_keys()
+    print(f"Приватный ключ: {private_key:064x}")
+    print(f"Публичный ключ: {public_key:016x}")
+    
+    # Создание подписи
+    message = "Важное сообщение для подписи"
+    signature = ds.sign(message, private_key)
+    print(f"Сообщение: {message}")
+    print(f"Подпись: {signature:016x}")
+    
+    # Проверка подписи
+    is_valid = ds.verify(message, signature, public_key)
+    print(f"Подпись верна: {is_valid}")
+    
+    # Проверка с измененным сообщением
+    is_valid_fake = ds.verify("Фальшивое сообщение", signature, public_key)
+    print(f"Подпись для фальшивого сообщения: {is_valid_fake}")
+    print()
+
+# Главная функция для тестирования всех алгоритмов
+def main():
+    test_simple_hash()
+    test_stream_cipher()
+    test_feistel()
+    test_spn()
+    test_advanced_hash()
+    test_sha256()
+    test_digital_signature()
+
+if __name__ == "__main__":
+    main()
