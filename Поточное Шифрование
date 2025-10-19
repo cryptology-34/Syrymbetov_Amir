@@ -2,51 +2,44 @@ class StreamCipher:
     def __init__(self, key):
         self.key = key
         self.position = 0
-    
-    def _prng(self):
-        # Псевдослучайный генератор на основе LFSR
-        state = self.key + self.position
-        while True:
-            state = (state << 1) ^ (state >> 3)
-            state &= 0xFFFFFFFF
-            yield state & 0xFF
-            self.position += 1
-    
-    def encrypt_decrypt(self, data):
-        # Шифрование/дешифрование (XOR с ключевым потоком)
-        generator = self._prng()
-        result = bytearray()
+        self.hasher = SimpleHash(256)
         
-        for byte in data:
-            key_byte = next(generator)
-            result.append(byte ^ key_byte)
-        return bytes(result)
+    def _key_stream(self, length):
+        """Генератор ключевого потока на основе хэш-функции"""
+        result = b''
+        for i in range(length):
+            # Используем хэш для генерации псевдослучайной последовательности
+            data = self.key + str(self.position).encode()
+            hash_val = self.hasher.hash(data)
+            result += bytes([hash_val[0]])
+            self.position += 1
+        return result
     
-    def encrypt_text(self, text):
-        # Шифрование текста
-        text_bytes = text.encode('utf-8')
-        encrypted_bytes = self.encrypt_decrypt(text_bytes)
-        return encrypted_bytes.hex()
+    def encrypt(self, data):
+        """Шифрование XOR с ключевым потоком"""
+        if isinstance(data, str):
+            data = data.encode()
+            
+        key_stream = self._key_stream(len(data))
+        encrypted = bytes([data[i] ^ key_stream[i] for i in range(len(data))])
+        return encrypted
     
-    def decrypt_text(self, hex_string):
-        # Дешифрование текста
-        encrypted_bytes = bytes.fromhex(hex_string)
-        decrypted_bytes = self.encrypt_decrypt(encrypted_bytes)
-        return decrypted_bytes.decode('utf-8')
+    def decrypt(self, encrypted_data):
+        """Дешифрование (аналогично шифрованию)"""
+        return self.encrypt(encrypted_data)
 
-# Пример использования
-if __name__ == "__main__":
-    cipher = StreamCipher(key=0xABCD1234)
-    message = "Реальность — иллюзия, Вселенная — голограмма, скупай золото!"
+# Тестирование поточного шифра
+def test_stream_cipher():
+    print("=== Тестирование поточного шифра ===")
+    cipher = StreamCipher(b"secret_key")
+    message = "Реальность — иллюзия, вселенная — голограмма, скупай золото!"
     
-    print("Поточное шифрование:")
+    encrypted = cipher.encrypt(message)
     print(f"Исходное: {message}")
+    print(f"Зашифрованное: {encrypted.hex()}")
     
-    encrypted_hex = cipher.encrypt_text(message)
-    print(f"Зашифровано (hex): {encrypted_hex}")    
-    # Создаем новый объект для дешифрования (сброс позиции)
-    cipher2 = StreamCipher(key=0xABCD1234)
-    decrypted = cipher2.decrypt_text(encrypted_hex)
-    print(f"Расшифровано: {decrypted}")
-    print(f"Совпадает: {message == decrypted}")
+    # Сбрасываем позицию для дешифрования
+    cipher.position = 0
+    decrypted = cipher.decrypt(encrypted)
+    print(f"Расшифрованное: {decrypted.decode()}")
     print()
