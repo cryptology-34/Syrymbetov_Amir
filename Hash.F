@@ -1,60 +1,47 @@
 class SimpleHash:
-    def __init__(self, digest_size=16):
-        self.digest_size = digest_size
-
-    def _process_block(self, block, state):
-        # Обработка одного блока данных
-        # Простая хэш-функция на основе операций XOR и сдвигов
-        for byte in block:
-            state ^= byte
-            state = (state << 3) | (state >> 5)
-            state &= 0xFFFFFFFF
-        return state
-
+    def __init__(self, output_bits=256):
+        self.output_bits = output_bits
+        self.output_bytes = output_bits // 8
+        
     def hash(self, data):
-        # Вычисление хэша
+        """Простая хэш-функция на основе операций XOR и сдвигов"""
         if isinstance(data, str):
-            data = data.encode('utf-8')
-        # Начальное значение (IV)
-        state = 0x6A09E667
-        # Обработка данных по блокам
-        block_size = 4
-        for i in range(0, len(data), block_size):
-            block = data[i:i + block_size]
-            # Дополнение последнего блока
-            if len(block) < block_size:
-                block = block.ljust(block_size, b'\x00')
-            state = self._process_block(block, state)
-        # Обрезаем до нужного размера
-        if self.digest_size == 16:
-            return hex(state)[2:].zfill(8)
-        else:
-            return hex(state)[2:].zfill(self.digest_size // 4)
+            data = data.encode()
+        
+        # Инициализация хэш-значения
+        hash_val = bytearray(b'\x00' * self.output_bytes)
+        
+        # Обработка данных блоками
+        for i in range(0, len(data), self.output_bytes):
+            block = data[i:i + self.output_bytes]
+            block = block.ljust(self.output_bytes, b'\x00')
+            
+            # Применяем XOR и циклический сдвиг
+            for j in range(self.output_bytes):
+                hash_val[j] ^= block[j]
+                hash_val[j] = ((hash_val[j] << 3) | (hash_val[j] >> 5)) & 0xFF
+        
+        # Дополнительное перемешивание
+        for _ in range(3):
+            for j in range(self.output_bytes):
+                hash_val[j] = (hash_val[j] + hash_val[(j + 1) % self.output_bytes]) & 0xFF
+                hash_val[j] = ((hash_val[j] << 5) | (hash_val[j] >> 3)) & 0xFF
+        
+        return bytes(hash_val)
 
-    def hash_file(self, filename):
-        # Вычисление хэша файла
-        try:
-            with open(filename, 'rb') as f:
-                content = f.read()
-            return self.hash(content)
-        except FileNotFoundError:
-            return f"Файл {filename} не найден"
-
-
-# Пример использования
-if __name__ == "__main__":
-    hasher = SimpleHash()
-    message = "Реальность — иллюзия, вселенная — голограмма, скупай золото"
-    print("Хэш-функция:")
-    print(f"Сообщение: {message}")
-
-    hash_value = hasher.hash(message)
-    print(f"Хэш: {hash_value}")
-    # Проверка коллизий
-    message2 = "Реальность — иллюзия, вселенная — голограмма, скупай золото!"
-    hash_value2 = hasher.hash(message2)
-    print(f"Хэш2: {hash_value2}")
-    print(f"Коллизия: {hash_value == hash_value2}")
-    # Хэш другого сообщения
-    test_msg = "Hello World"
-    print(f"Хэш '{test_msg}': {hasher.hash(test_msg)}")
+def test_simple_hash():
+    print("=== Тестирование простой хэш-функции ===")
+    hasher = SimpleHash(256)
+    
+    message1 = "Реальность — иллюзия, вселенная — голограмма, скупай золото!"
+    message2 = "Реальность — иллюзия, вселенная — голограмма, скупай золото"
+    
+    hash1 = hasher.hash(message1)
+    hash2 = hasher.hash(message2)
+    
+    print(f"Сообщение 1: {message1}")
+    print(f"Хэш 1: {hash1.hex()}")
+    print(f"Сообщение 2: {message2}")
+    print(f"Хэш 2: {hash2.hex()}")
+    print(f"Хэши различны: {hash1 != hash2}")
+    print()
