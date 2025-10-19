@@ -1,119 +1,85 @@
-import random
-import binascii
-
 class SPN:
-    def __init__(self, block_size=16, key_size=16, rounds=4):
-        self.block_size = block_size
-        self.key_size = key_size
-        self.rounds = rounds
-        self.s_box = self._generate_sbox()
-        self.inv_s_box = {v: k for k, v in self.s_box.items()}
-        self.keys = self._generate_keys()
+    def __init__(self, key):
+        self.key = key
+        self.feistel = FeistelCipher(key)
+        self.hasher = SimpleHash(256)  # Добавляем хэш-функцию
+        
+        # S-блоки на основе хэш-функции
+        self.s_box = self._generate_s_box()
+        self.s_box_inv = {v: k for k, v in self.s_box.items()}
+        
+        # P-блок (простая перестановка)
+        self.p_box = [3, 0, 2, 1, 7, 4, 6, 5]
     
-    def _generate_sbox(self):
-        # Генерация S-блока
-        values = list(range(16))
-        random.shuffle(values)
-        return {i: values[i] for i in range(16)}
+    def _generate_s_box(self):
+        """Генерация S-блока на основе хэш-функции"""
+        s_box = {}
+        for i in range(256):
+            hash_val = self.hasher.hash(bytes([i]) + self.key)
+            s_box[i] = hash_val[0]
+        return s_box
     
-    def _generate_keys(self):
-        # Генерация раундовых ключей
-        master_key = random.getrandbits(self.key_size * 8)
-        keys = []
-        for i in range(self.rounds + 1):
-            key = (master_key >> (i * 4)) & 0xFFFF
-            keys.append(key)
-        return keys
+    def _substitute(self, data):
+        """S-блок подстановка"""
+        return bytes([self.s_box[b] for b in data])
     
-    def _substitute(self, data, s_box):
-        # Замена байтов через S-блок
-        result = 0
-        for i in range(4):
-            nibble = (data >> (i * 4)) & 0xF
-            substituted = s_box[nibble]
-            result |= (substituted << (i * 4))
-        return result
+    def _substitute_inv(self, data):
+        """Обратная S-блок подстановка"""
+        return bytes([self.s_box_inv[b] for b in data])
     
     def _permute(self, data):
-        # Перестановка битов
-        result = 0
-        for i in range(16):
-            if data & (1 << i):
-                new_pos = (i * 4) % 15
-                result |= (1 << new_pos)
-        return result
+        """P-блок перестановка"""
+        if len(data) != 8:
+            raise ValueError("Data must be 8 bytes for permutation")
+        result = bytearray(8)
+        for i, pos in enumerate(self.p_box):
+            result[i] = data[pos]
+        return bytes(result)
     
-    def encrypt(self, plaintext):
-        # Шифрование SPN
-        data = int.from_bytes(plaintext, 'big')        
-        for round in range(self.rounds):
-            # XOR с ключом
-            data ^= self.keys[round]
-            # Замена
-            data = self._substitute(data, self.s_box)
-            # Перестановка (кроме последнего раунда)
-            if round != self.rounds - 1:
-                data = self._permute(data)
-        # Финальный XOR
-        data ^= self.keys[self.rounds]        
-        return data.to_bytes(2, 'big')
+    def _permute_inv(self, data):
+        """Обратная P-блок перестановка"""
+        if len(data) != 8:
+            raise ValueError("Data must be 8 bytes for permutation")
+        result = bytearray(8)
+        for i, pos in enumerate(self.p_box):
+            result[pos] = data[i]
+        return bytes(result)
     
-    def decrypt(self, ciphertext):
+    def encrypt(self, data):
+        """Шифрование SPN"""
+        # Используем Фейстель для первого этапа
+        feistel_result = self.feistel.encrypt_block(data)
+        
+        # Применяем S-блок
+        substituted = self._substitute(feistel_result)
+        
+        # Применяем P-блок
+        permuted = self._permute(substituted)
+        
+        return permuted
+    
+    def decrypt(self, data):
         """Дешифрование SPN"""
-        data = int.from_bytes(ciphertext, 'big')
+        # Обратная P-блок
+        permuted_inv = self._permute_inv(data)
         
-        # Финальный XOR
-        data ^= self.keys[self.rounds]
+        # Обратная S-блок
+        substituted_inv = self._substitute_inv(permuted_inv)
         
-        for round in range(self.rounds - 1, -1, -1):
-            # Обратная перестановка (кроме последнего раунда)
-            if round != self.rounds - 1:
-                data = self._permute(data)
-            # Обратная замена
-            data = self._substitute(data, self.inv_s_box)
-            # XOR с ключом
-            data ^= self.keys[round]
+        # Дешифрование Фейстелем
+        decrypted = self.feistel.decrypt_block(substituted_inv)
         
-        return data.to_bytes(2, 'big')
+        return decrypted
 
-if __name__ == "__main__":
-    spn = SPN()
-    message = "SPN тест"
-    print("SPN Шифрование:")
-    print(f"Исходное: {message}")    
-    # Преобразуем весь текст в байты
-    text_bytes = message.encode('utf-8')
-    print(f"Байты исходного текста: {text_bytes.hex()}")    
-    # Шифруем по блокам по 2 байта
-    encrypted_blocks = []
-    for i in range(0, len(text_bytes), 2):
-        block_bytes = text_bytes[i:i+2]
-        # Дополняем последний блок если нужно
-        if len(block_bytes) < 2:
-            block_bytes = block_bytes.ljust(2, b'\x00')
-        encrypted = spn.encrypt(block_bytes)
-        encrypted_blocks.append(encrypted)
-    # Объединяем зашифрованные блоки
-    encrypted_bytes = b''.join(encrypted_blocks)
-    print(f"Зашифрованные байты (hex): {encrypted_bytes.hex()}")    
-    # Дешифруем
-    decrypted_blocks = []
-    for i in range(0, len(encrypted_bytes), 2):
-        block = encrypted_bytes[i:i+2]
-        decrypted = spn.decrypt(block)
-        decrypted_blocks.append(decrypted)    
-    # Объединяем расшифрованные байты
-    decrypted_bytes = b''.join(decrypted_blocks)
-    print(f"Расшифрованные байты (hex): {decrypted_bytes.hex()}")
-    # Убираем дополнение и преобразуем обратно в текст
-    original_length = len(text_bytes)
-    decrypted_bytes_trimmed = decrypted_bytes[:original_length]
+def test_spn():
+    print("=== Тестирование SPN ===")
+    spn = SPN(b"spn_key")
     
-    try:
-        decrypted_text = decrypted_bytes_trimmed.decode('utf-8')
-        print(f"Расшифрованный текст: '{decrypted_text}'")
-        print(f"Совпадает: {message == decrypted_text}")
-    except UnicodeDecodeError as e:
-        print(f"Ошибка декодирования: {e}")
-        print("Но байты совпадают:", text_bytes == decrypted_bytes_trimmed)
+    block = b"ABCDEFGH"  # 8-байтовый блок
+    encrypted = spn.encrypt(block)
+    decrypted = spn.decrypt(encrypted)
+    
+    print(f"Исходный блок: {block}")
+    print(f"Зашифрованный: {encrypted.hex()}")
+    print(f"Расшифрованный: {decrypted}")
     print()
