@@ -1,45 +1,52 @@
+import hashlib
+
 class StreamCipher:
     def __init__(self, key):
         self.key = key
         self.position = 0
-        self.hasher = SimpleHash(256)
-        
+
+    # Генератор ключевого потока на основе SHA-256
     def _key_stream(self, length): 
-        """Генератор ключевого потока на основе хэш-функции"""
         result = b''
-        for i in range(length):
+        while len(result) < length:
             # Используем хэш для генерации псевдослучайной последовательности
             data = self.key + str(self.position).encode()
-            hash_val = self.hasher.hash(data)
-            result += bytes([hash_val[0]])
+            hash_val = hashlib.sha256(data).digest()
+            result += hash_val
             self.position += 1
-        return result 
-    
+        return result[:length]
+
+    # Шифрование XOR с ключевым потоком
     def encrypt(self, data):
-        """Шифрование XOR с ключевым потоком"""
         if isinstance(data, str):
             data = data.encode()
-            
         key_stream = self._key_stream(len(data))
         encrypted = bytes([data[i] ^ key_stream[i] for i in range(len(data))])
         return encrypted
-    
+
+    # Дешифрование идентично шифрованию
     def decrypt(self, encrypted_data):
-        """Дешифрование (аналогично шифрованию)"""
         return self.encrypt(encrypted_data)
 
-# Тестирование поточного шифра
-def test_stream_cipher():
-    print("=== Тестирование поточного шифра ===")
-    cipher = StreamCipher(b"secret_key")
-    message = "Реальность — иллюзия, вселенная — голограмма, скупай золото!"
+def interactive_cipher():
+    print("=== Поточный шифр на основе StreamCipher ===")
+    mode = input("Вы хотите зашифровать (e) или расшифровать (d)? \n").strip().lower()
+    key = input("Введите ключ: \n").encode()
+    cipher = StreamCipher(key)
     
-    encrypted = cipher.encrypt(message)
-    print(f"Исходное: {message}")
-    print(f"Зашифрованное: {encrypted.hex()}")
-    
-    # Сбрасываем позицию для дешифрования
-    cipher.position = 0
-    decrypted = cipher.decrypt(encrypted)
-    print(f"Расшифрованное: {decrypted.decode()}")
-    print()
+    if mode == 'e':
+        message = input("Введите сообщение для шифрования: \n")
+        encrypted = cipher.encrypt(message)
+        print(f"\nЗашифрованное (в hex): {encrypted.hex()}")
+        
+    elif mode == 'd':
+        hex_data = input("Введите зашифрованный текст в hex: \n").strip()
+        encrypted = bytes.fromhex(hex_data)
+        decrypted = cipher.decrypt(encrypted)
+        print(f"\nРасшифрованное сообщение: {decrypted.decode(errors='replace')}")
+
+    else:
+        print("Неверный выбор режима (используйте 'e' или 'd').")
+
+if __name__ == "__main__":
+    interactive_cipher()
