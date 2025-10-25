@@ -4,7 +4,7 @@ class StreamCipher:
         self.position = 0
         self.hasher = SimpleHash(256)
         
-    def _key_stream(self, length):
+    def _key_stream(self, length): # Новая часть начинается
         """Генератор ключевого потока на основе хэш-функции"""
         result = b''
         for i in range(length):
@@ -13,7 +13,7 @@ class StreamCipher:
             hash_val = self.hasher.hash(data)
             result += bytes([hash_val[0]])
             self.position += 1
-        return result
+        return result # Новая часть закнчивается
     
     def encrypt(self, data):
         """Шифрование XOR с ключевым потоком"""
