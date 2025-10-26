@@ -1,71 +1,701 @@
-import random
+import struct
+import math
+import hashlib
+import secrets
+import binascii
+
+class SHA256:
+    def __init__(self):
+        self.h = [
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+        ]
+        
+        self.k = [
+            0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+            0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+            0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+            0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+            0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+            0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+            0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+            0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+        ]
+        
+    def _rotr(self, n, x):
+        return ((x >> n) | (x << (32 - n))) & 0xFFFFFFFF
+    
+    def _shr(self, n, x):
+        return (x >> n) & 0xFFFFFFFF
+    
+    def _ch(self, x, y, z):
+        return (x & y) ^ (~x & z)
+    
+    def _maj(self, x, y, z):
+        return (x & y) ^ (x & z) ^ (y & z)
+    
+    def _sigma0(self, x):
+        return self._rotr(2, x) ^ self._rotr(13, x) ^ self._rotr(22, x)
+    
+    def _sigma1(self, x):
+        return self._rotr(6, x) ^ self._rotr(11, x) ^ self._rotr(25, x)
+    
+    def _gamma0(self, x):
+        return self._rotr(7, x) ^ self._rotr(18, x) ^ self._shr(3, x)
+    
+    def _gamma1(self, x):
+        return self._rotr(17, x) ^ self._rotr(19, x) ^ self._shr(10, x)
+    
+    def _pad_message(self, message):
+        if isinstance(message, str):
+            message = message.encode('utf-8')
+        
+        length = len(message) * 8
+        message += b'\x80'
+        
+        while (len(message) * 8) % 512 != 448:
+            message += b'\x00'
+        
+        message += struct.pack('>Q', length)
+        return message
+    
+    def _process_block(self, block):
+        if len(block) != 64:
+            raise ValueError("Block must be exactly 64 bytes (512 bits)")
+            
+        w = list(struct.unpack('>16I', block))
+        
+        for i in range(16, 64):
+            s0 = self._gamma0(w[i-15])
+            s1 = self._gamma1(w[i-2])
+            w.append((w[i-16] + s0 + w[i-7] + s1) & 0xFFFFFFFF)
+        
+        a, b, c, d, e, f, g, h = self.h
+        
+        for i in range(64):
+            s1 = self._sigma1(e)
+            ch = self._ch(e, f, g)
+            temp1 = (h + s1 + ch + self.k[i] + w[i]) & 0xFFFFFFFF
+            s0 = self._sigma0(a)
+            maj = self._maj(a, b, c)
+            temp2 = (s0 + maj) & 0xFFFFFFFF
+            
+            h = g
+            g = f
+            f = e
+            e = (d + temp1) & 0xFFFFFFFF
+            d = c
+            c = b
+            b = a
+            a = (temp1 + temp2) & 0xFFFFFFFF
+        
+        self.h[0] = (self.h[0] + a) & 0xFFFFFFFF
+        self.h[1] = (self.h[1] + b) & 0xFFFFFFFF
+        self.h[2] = (self.h[2] + c) & 0xFFFFFFFF
+        self.h[3] = (self.h[3] + d) & 0xFFFFFFFF
+        self.h[4] = (self.h[4] + e) & 0xFFFFFFFF
+        self.h[5] = (self.h[5] + f) & 0xFFFFFFFF
+        self.h[6] = (self.h[6] + g) & 0xFFFFFFFF
+        self.h[7] = (self.h[7] + h) & 0xFFFFFFFF
+    
+    def hash(self, data):
+        if isinstance(data, str):
+            data = data.encode('utf-8')
+        
+        self.h = [
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+        ]
+        
+        padded_data = self._pad_message(data)
+        
+        for i in range(0, len(padded_data), 64):
+            block = padded_data[i:i+64]
+            if len(block) == 64:
+                self._process_block(block)
+        
+        return b''.join(struct.pack('>I', h) for h in self.h)
+    
+    def hexdigest(self, data):
+        return self.hash(data).hex()
+
+
+class EllipticCurve:
+    """Простая эллиптическая кривая для ECDSA"""
+    def __init__(self):
+        # Параметры упрощенной эллиптической кривой (для демонстрации)
+        self.p = 2**255 - 19  # Простое число
+        self.a = -1
+        self.b = 0
+        self.G = (9, 14781619447589544791020593568409986887264606134616475288964881837755586237401)
+        self.n = 2**252 + 27742317777372353535851937790883648493  # Порядок группы
+    
+    def mod_inverse(self, a, p):
+        """Модульное обратное по малой теореме Ферма"""
+        return pow(a, p-2, p)
+    
+    def point_add(self, P1, P2):
+        """Сложение точек на эллиптической кривой"""
+        if P1 is None:
+            return P2
+        if P2 is None:
+            return P1
+            
+        x1, y1 = P1
+        x2, y2 = P2
+        
+        if x1 == x2:
+            if y1 == y2:
+                # Удвоение точки
+                s = (3 * x1 * x1 + self.a) * self.mod_inverse(2 * y1, self.p) % self.p
+            else:
+                return None  # Точки симметричны
+        else:
+            s = (y2 - y1) * self.mod_inverse(x2 - x1, self.p) % self.p
+        
+        x3 = (s * s - x1 - x2) % self.p
+        y3 = (s * (x1 - x3) - y1) % self.p
+        
+        return (x3, y3)
+    
+    def point_multiply(self, k, P):
+        """Умножение точки на скаляр (быстрое)"""
+        if k == 0:
+            return None
+        if k == 1:
+            return P
+            
+        result = None
+        addend = P
+        
+        while k:
+            if k & 1:
+                result = self.point_add(result, addend)
+            addend = self.point_add(addend, addend)
+            k >>= 1
+            
+        return result
+
 
 class DigitalSignature:
+    """Реализация ЭЦП на основе ECDSA"""
     def __init__(self):
-        self.hasher = AdvancedHash(256)  # Используем нашу улучшенную хэш-функцию
+        self.curve = EllipticCurve()
+        self.sha256 = SHA256()
     
-    def generate_keys(self):
-        """Генерация ключевой пары"""
-        private_key = random.getrandbits(256)
-        public_key = self.hasher.hash(str(private_key).encode())[:16]  # Упрощенное преобразование
-        public_key = int.from_bytes(public_key, 'big')
+    def generate_key_pair(self):
+        """Генерация пары ключей (приватный и публичный)"""
+        # Генерируем случайный приватный ключ
+        private_key = secrets.randbelow(self.curve.n - 1) + 1
+        
+        # Вычисляем публичный ключ
+        public_key = self.curve.point_multiply(private_key, self.curve.G)
+        
         return private_key, public_key
     
     def sign(self, message, private_key):
-        """Создание подписи"""
+        """Создание подписи для сообщения"""
         # Хешируем сообщение
-        message_hash = self.hasher.hash(message)
-        hash_int = int.from_bytes(message_hash[:8], 'big')
+        message_hash = int.from_bytes(self.sha256.hash(message), byteorder='big')
+        message_hash = message_hash % self.curve.n
         
-        # Создаем подпись
-        signature = (hash_int * private_key) & 0xFFFFFFFFFFFFFFFF
+        while True:
+            # Генерируем случайное k
+            k = secrets.randbelow(self.curve.n - 1) + 1
+            
+            # Вычисляем R = k * G
+            R = self.curve.point_multiply(k, self.curve.G)
+            if R is None:
+                continue
+                
+            r = R[0] % self.curve.n
+            if r == 0:
+                continue
+            
+            # Вычисляем s = k^(-1) * (hash + r * private_key) mod n
+            k_inv = self.curve.mod_inverse(k, self.curve.n)
+            s = (k_inv * (message_hash + r * private_key)) % self.curve.n
+            
+            if s != 0:
+                break
         
-        return signature
+        return (r, s)
     
     def verify(self, message, signature, public_key):
         """Проверка подписи"""
+        r, s = signature
+        
+        # Проверяем корректность подписи
+        if not (1 <= r < self.curve.n and 1 <= s < self.curve.n):
+            return False
+        
         # Хешируем сообщение
-        message_hash = self.hasher.hash(message)
-        hash_int = int.from_bytes(message_hash[:8], 'big')
+        message_hash = int.from_bytes(self.sha256.hash(message), byteorder='big')
+        message_hash = message_hash % self.curve.n
         
-        # Проверяем подпись
-        expected = (hash_int * public_key) & 0xFFFFFFFFFFFFFFFF
+        # Вычисляем w = s^(-1) mod n
+        w = self.curve.mod_inverse(s, self.curve.n)
         
-        return signature == expected
+        # Вычисляем u1 и u2
+        u1 = (message_hash * w) % self.curve.n
+        u2 = (r * w) % self.curve.n
+        
+        # Вычисляем точку X = u1 * G + u2 * public_key
+        X1 = self.curve.point_multiply(u1, self.curve.G)
+        X2 = self.curve.point_multiply(u2, public_key)
+        X = self.curve.point_add(X1, X2)
+        
+        if X is None:
+            return False
+        
+        # Проверяем условие
+        return (X[0] % self.curve.n) == r
+    
+    def signature_to_string(self, signature):
+        """Преобразование подписи в строку"""
+        r, s = signature
+        return f"{r:064x}{s:064x}"
+    
+    def string_to_signature(self, sig_str):
+        """Преобразование строки в подпись"""
+        if len(sig_str) != 128:
+            raise ValueError("Invalid signature string length")
+        r = int(sig_str[:64], 16)
+        s = int(sig_str[64:], 16)
+        return (r, s)
+    
+    def public_key_to_string(self, public_key):
+        """Преобразование публичного ключа в строку"""
+        x, y = public_key
+        return f"{x:064x}{y:064x}"
+    
+    def string_to_public_key(self, key_str):
+        """Преобразование строки в публичный ключ"""
+        if len(key_str) != 128:
+            raise ValueError("Invalid public key string length")
+        x = int(key_str[:64], 16)
+        y = int(key_str[64:], 16)
+        return (x, y)
 
-def test_digital_signature():
-    print("=== Тестирование ЭЦП ===")
-    ds = DigitalSignature()
-    
-    # Генерация ключей
-    private_key, public_key = ds.generate_keys()
-    print(f"Приватный ключ: {private_key:064x}")
-    print(f"Публичный ключ: {public_key:016x}")
-    
-    # Создание подписи
-    message = "Важное сообщение для подписи"
-    signature = ds.sign(message, private_key)
-    print(f"Сообщение: {message}")
-    print(f"Подпись: {signature:016x}")
-    
-    # Проверка подписи
-    is_valid = ds.verify(message, signature, public_key)
-    print(f"Подпись верна: {is_valid}")
-    
-    # Проверка с измененным сообщением
-    is_valid_fake = ds.verify("Фальшивое сообщение", signature, public_key)
-    print(f"Подпись для фальшивого сообщения: {is_valid_fake}")
-    print()
 
-# Главная функция для тестирования всех алгоритмов
-def main():
-    test_simple_hash()
-    test_stream_cipher()
-    test_feistel()
-    test_spn()
-    test_advanced_hash()
-    test_sha256()
-    test_digital_signature()
+# Существующие классы остаются без изменений
+class SimpleHash:
+    def __init__(self, output_bits=256):
+        self.output_bits = output_bits
+        self.output_bytes = output_bits // 8
+        
+    def hash(self, data):
+        if isinstance(data, str):
+            data = data.encode()
+        hash_val = bytearray(b'\x00' * self.output_bytes)
+        for i in range(0, len(data), self.output_bytes):
+            block = data[i:i + self.output_bytes]
+            block = block.ljust(self.output_bytes, b'\x00')
+            for j in range(self.output_bytes):
+                hash_val[j] ^= block[j]
+                hash_val[j] = ((hash_val[j] << 3) | (hash_val[j] >> 5)) & 0xFF
+        for _ in range(3):
+            for j in range(self.output_bytes):
+                hash_val[j] = (hash_val[j] + hash_val[(j + 1) % self.output_bytes]) & 0xFF
+                hash_val[j] = ((hash_val[j] << 5) | (hash_val[j] >> 3)) & 0xFF
+        return bytes(hash_val)
+
+
+class FeistelNetwork:
+    def __init__(self, key, rounds=16):
+        self.key = key
+        self.rounds = rounds
+        self.position = 0
+        self.hasher = SimpleHash(256)
+
+    def _reset_position(self):
+        self.position = 0
+
+    def _key_stream(self, length):
+        result = b''
+        while len(result) < length:
+            data = self.key + str(self.position).encode()
+            hash_val = self.hasher.hash(data)
+            result += hash_val
+            self.position += 1
+        return result[:length]
+
+    def _f_function(self, right_block, round_key):
+        block_bytes = right_block.to_bytes(4, 'big')
+        mixed = bytes([block_bytes[i] ^ round_key[i % len(round_key)] for i in range(len(block_bytes))])
+        result = self.hasher.hash(mixed)
+        return int.from_bytes(result[:4], 'big')
+
+    def _split_blocks(self, data):
+        blocks = []
+        for i in range(0, len(data), 8):
+            block = data[i:i+8]
+            if len(block) < 8:
+                block = block + b'\x00' * (8 - len(block))
+            blocks.append(block)
+        return blocks
+
+    def encrypt(self, data):
+        if isinstance(data, str):
+            data = data.encode()
+            
+        self._reset_position()
+        blocks = self._split_blocks(data)
+        encrypted_blocks = []
+        
+        for block in blocks:
+            left = int.from_bytes(block[:4], 'big')
+            right = int.from_bytes(block[4:], 'big')
+            
+            round_keys = self._key_stream(self.rounds * 4)
+            
+            for round_num in range(self.rounds):
+                round_key = round_keys[round_num*4:(round_num+1)*4]
+                temp = right
+                f_result = self._f_function(right, round_key)
+                right = left ^ f_result
+                left = temp
+            
+            encrypted_block = left.to_bytes(4, 'big') + right.to_bytes(4, 'big')
+            encrypted_blocks.append(encrypted_block)
+        
+        return b''.join(encrypted_blocks)
+
+    def decrypt(self, encrypted_data):
+        self._reset_position()
+        blocks = self._split_blocks(encrypted_data)
+        decrypted_blocks = []
+        
+        for block in blocks:
+            left = int.from_bytes(block[:4], 'big')
+            right = int.from_bytes(block[4:], 'big')
+            
+            round_keys = self._key_stream(self.rounds * 4)
+            
+            for round_num in range(self.rounds-1, -1, -1):
+                round_key = round_keys[round_num*4:(round_num+1)*4]
+                temp = left
+                f_result = self._f_function(left, round_key)
+                left = right ^ f_result
+                right = temp
+            
+            decrypted_block = left.to_bytes(4, 'big') + right.to_bytes(4, 'big')
+            decrypted_blocks.append(decrypted_block)
+        
+        return b''.join(decrypted_blocks)
+
+
+class StreamCipher:
+    def __init__(self, key):
+        self.key = key
+        self.position = 0
+        self.hasher = SimpleHash(256)
+
+    def _reset_position(self):
+        self.position = 0
+
+    def _key_stream(self, length):
+        result = b''
+        while len(result) < length:
+            data = self.key + str(self.position).encode()
+            hash_val = self.hasher.hash(data)
+            result += hash_val
+            self.position += 1
+        return result[:length]
+
+    def encrypt(self, data):
+        if isinstance(data, str):
+            data = data.encode()
+        self._reset_position()
+        key_stream = self._key_stream(len(data))
+        encrypted = bytes([data[i] ^ key_stream[i] for i in range(len(data))])
+        return encrypted
+
+    def decrypt(self, encrypted_data):
+        self._reset_position()
+        return self.encrypt(encrypted_data)
+
+
+def interactive_digital_signature():
+    """Интерактивный режим для ЭЦП"""
+    print("=== Электронная Цифровая Подпись (ECDSA) ===")
+    
+    dsa = DigitalSignature()
+    private_key = None
+    public_key = None
+    
+    while True:
+        print("\n1. Сгенерировать пару ключей")
+        print("2. Подписать сообщение")
+        print("3. Проверить подпись")
+        print("4. Экспорт/импорт ключей")
+        print("5. Вернуться в главное меню")
+        
+        choice = input("Выберите действие (1-5): ").strip()
+        
+        if choice == '5':
+            break
+        elif choice == '1':
+            private_key, public_key = dsa.generate_key_pair()
+            print(f"\n✓ Пара ключей сгенерирована!")
+            print(f"Приватный ключ: {private_key:064x}")
+            print(f"Публичный ключ: {dsa.public_key_to_string(public_key)}")
+            
+        elif choice == '2':
+            if private_key is None:
+                print("✗ Сначала сгенерируйте пару ключей!")
+                continue
+                
+            message = input("Введите сообщение для подписи: ")
+            signature = dsa.sign(message, private_key)
+            signature_str = dsa.signature_to_string(signature)
+            
+            print(f"\n✓ Сообщение подписано!")
+            print(f"Сообщение: '{message}'")
+            print(f"Подпись: {signature_str}")
+            
+            # Проверяем подпись для демонстрации
+            is_valid = dsa.verify(message, signature, public_key)
+            print(f"Проверка подписи: {'✓ ВАЛИДНА' if is_valid else '✗ НЕВАЛИДНА'}")
+            
+        elif choice == '3':
+            if public_key is None:
+                print("✗ Сначала сгенерируйте или импортируйте публичный ключ!")
+                continue
+                
+            message = input("Введите сообщение для проверки: ")
+            signature_str = input("Введите подпись (hex): ").strip()
+            
+            try:
+                signature = dsa.string_to_signature(signature_str)
+                is_valid = dsa.verify(message, signature, public_key)
+                
+                print(f"\nРезультат проверки: {'✓ ПОДПИСЬ ВАЛИДНА' if is_valid else '✗ ПОДПИСЬ НЕВАЛИДНА'}")
+                print(f"Сообщение: '{message}'")
+                print(f"Публичный ключ: {dsa.public_key_to_string(public_key)[:32]}...")
+                
+            except Exception as e:
+                print(f"✗ Ошибка при проверке подписи: {e}")
+                
+        elif choice == '4':
+            print("\n1. Экспортировать ключи")
+            print("2. Импортировать публичный ключ")
+            print("3. Импортировать приватный ключ")
+            
+            sub_choice = input("Выберите действие (1-3): ").strip()
+            
+            if sub_choice == '1':
+                if private_key is None or public_key is None:
+                    print("✗ Сначала сгенерируйте пару ключей!")
+                    continue
+                    
+                print(f"\nПриватный ключ: {private_key:064x}")
+                print(f"Публичный ключ: {dsa.public_key_to_string(public_key)}")
+                
+            elif sub_choice == '2':
+                key_str = input("Введите публичный ключ (hex): ").strip()
+                try:
+                    public_key = dsa.string_to_public_key(key_str)
+                    print("✓ Публичный ключ импортирован!")
+                except Exception as e:
+                    print(f"✗ Ошибка импорта: {e}")
+                    
+            elif sub_choice == '3':
+                key_str = input("Введите приватный ключ (hex): ").strip()
+                try:
+                    private_key = int(key_str, 16)
+                    # Вычисляем соответствующий публичный ключ
+                    public_key = dsa.curve.point_multiply(private_key, dsa.curve.G)
+                    print("✓ Приватный ключ импортирован!")
+                except Exception as e:
+                    print(f"✗ Ошибка импорта: {e}")
+
+
+def interactive_cipher():
+    print("=== Сравнение алгоритмов шифрования, хеширования и ЭЦП ===")
+    
+    while True:
+        print("\nВыберите алгоритм:")
+        print("1. Поточный шифр (XOR)")
+        print("2. Сеть Фейстеля (блочный)")
+        print("3. SHA-256 (хеширование)")
+        print("4. ЭЦП (цифровая подпись)")
+        print("5. Тестирование всех алгоритмов")
+        print("6. Выйти")
+        
+        algo_choice = input("Ваш выбор (1-6): ").strip()
+        
+        if algo_choice == '6':
+            print("Выход...")
+            break
+        elif algo_choice == '3':
+            interactive_sha256()
+            continue
+        elif algo_choice == '4':
+            interactive_digital_signature()
+            continue
+        elif algo_choice == '5':
+            test_all_algorithms()
+            continue
+        elif algo_choice not in ['1', '2']:
+            print("Неверный выбор алгоритма!")
+            continue
+            
+        mode = input("Вы хотите зашифровать (e) или расшифровать (d)? ").strip().lower()
+        
+        if mode not in ['e', 'd']:
+            print("Неверный выбор режима!")
+            continue
+            
+        key_input = input("Введите ключ: ")
+        if not key_input:
+            print("Ключ не может быть пустым!")
+            continue
+        key = key_input.encode()
+        
+        if algo_choice == '1':
+            cipher = StreamCipher(key)
+            algo_name = "поточный шифр"
+        else:
+            rounds_input = input("Введите количество раундов (по умолчанию 16): ").strip()
+            rounds = int(rounds_input) if rounds_input else 16
+            cipher = FeistelNetwork(key, rounds)
+            algo_name = f"сеть Фейстеля ({rounds} раундов)"
+        
+        if mode == 'e':
+            message = input("Введите сообщение для шифрования: ")
+            if not message:
+                print("Сообщение не может быть пустым!")
+                continue
+                
+            print(f"\nШифруем с помощью {algo_name}...")
+            encrypted = cipher.encrypt(message)
+            print(f"Зашифрованное (hex): {encrypted.hex()}")
+            print(f"Длина: {len(encrypted)} байт")
+            
+        else:
+            hex_data = input("Введите зашифрованный текст в hex: ").strip()
+            if not hex_data:
+                print("Данные не могут быть пустыми!")
+                continue
+                
+            try:
+                encrypted = bytes.fromhex(hex_data)
+                print(f"\nДешифруем с помощью {algo_name}...")
+                decrypted = cipher.decrypt(encrypted)
+                decrypted = decrypted.rstrip(b'\x00')
+                print(f"Расшифрованное сообщение: {decrypted.decode(errors='replace')}")
+                
+            except ValueError as e:
+                print(f"Ошибка: неверный hex формат! {e}")
+            except Exception as e:
+                print(f"Ошибка при дешифровании: {e}")
+
+
+def interactive_sha256():
+    """Интерактивный режим для SHA-256"""
+    print("=== SHA-256 Hash Calculator ===")
+    
+    sha = SHA256()
+    
+    while True:
+        print("\n1. Вычислить хеш")
+        print("2. Сравнить с встроенным hashlib.sha256")
+        print("3. Вернуться в главное меню")
+        
+        choice = input("Выберите действие (1-3): ").strip()
+        
+        if choice == '3':
+            break
+        elif choice == '1':
+            data = input("Введите данные для хеширования: ")
+            custom_hash = sha.hexdigest(data)
+            builtin_hash = hashlib.sha256(data.encode()).hexdigest()
+            
+            print(f"\nРеализация SHA-256: {custom_hash}")
+            print(f"Встроенный SHA-256:  {builtin_hash}")
+            print(f"Совпадение: {custom_hash == builtin_hash}")
+            
+        elif choice == '2':
+            test_vectors = ["", "abc", "Hello, World!", "SHA-256 test", "a" * 100]
+            
+            print("\nСравнение с тестовыми векторами:")
+            print("=" * 60)
+            
+            for test in test_vectors:
+                sha_custom = SHA256()
+                custom = sha_custom.hexdigest(test)
+                builtin = hashlib.sha256(test.encode()).hexdigest()
+                match = custom == builtin
+                status = "✓" if match else "✗"
+                
+                print(f"{status} '{test[:20]}{'...' if len(test) > 20 else ''}'")
+                if not match:
+                    print(f"  Custom:  {custom}")
+                    print(f"  Builtin: {builtin}")
+            print()
+
+
+def test_all_algorithms():
+    """Тестирование всех алгоритмов"""
+    print("\n" + "="*50)
+    print("ТЕСТИРОВАНИЕ ВСЕХ АЛГОРИТМОВ")
+    print("="*50)
+    
+    message = input("Введите тестовое сообщение: ")
+    if not message:
+        print("Сообщение не может быть пустым!")
+        return
+        
+    key_input = input("Введите ключ для теста (или нажмите Enter для ключа по умолчанию b'test_key'): ")
+    key = key_input.encode() if key_input else b"test_key"
+    
+    print(f"\n--- Тестовые данные ---")
+    print(f"Сообщение: '{message}'")
+    print(f"Длина сообщения: {len(message)} байт")
+    print(f"Ключ: {key}")
+    
+    # Тестируем SHA-256
+    print(f"\n--- SHA-256 ---")
+    sha = SHA256()
+    custom_hash = sha.hexdigest(message)
+    builtin_hash = hashlib.sha256(message.encode()).hexdigest()
+    print(f"Реализация SHA-256: {custom_hash}")
+    print(f"Встроенный SHA-256:  {builtin_hash}")
+    print(f"Совпадение: {custom_hash == builtin_hash}")
+    
+    # Тестируем ЭЦП
+    print(f"\n--- ЭЦП (ECDSA) ---")
+    dsa = DigitalSignature()
+    private_key, public_key = dsa.generate_key_pair()
+    signature = dsa.sign(message, private_key)
+    is_valid = dsa.verify(message, signature, public_key)
+    
+    print(f"Приватный ключ: {private_key:032x}...")
+    print(f"Публичный ключ: {dsa.public_key_to_string(public_key)[:32]}...")
+    print(f"Подпись: {dsa.signature_to_string(signature)[:32]}...")
+    print(f"Проверка подписи: {'✓ УСПЕХ' if is_valid else '✗ ОШИБКА'}")
+    
+    # Тестируем алгоритмы шифрования
+    algorithms = [
+        ("Поточный шифр", StreamCipher(key)),
+        ("Сеть Фейстеля (8 раундов)", FeistelNetwork(key, 8)),
+    ]
+    
+    for algo_name, cipher in algorithms:
+        print(f"\n--- {algo_name} ---")
+        try:
+            encrypted = cipher.encrypt(message)
+            decrypted = cipher.decrypt(encrypted)
+            decrypted = decrypted.rstrip(b'\x00')
+            success = decrypted.decode() == message
+            print(f"Результат: {'✓ УСПЕХ' if success else '✗ ОШИБКА'}")
+            print(f"Зашифровано (первые 32 hex): {encrypted.hex()[:32]}...")
+            print(f"Размер: {len(encrypted)} байт")
+            
+        except Exception as e:
+            print(f"Результат: ✗ ОШИБКА: {e}")
+
 
 if __name__ == "__main__":
-    main()
+    interactive_cipher()
