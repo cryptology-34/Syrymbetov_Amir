@@ -26,6 +26,7 @@ class StreamCipher:
 
     # Дешифрование идентично шифрованию
     def decrypt(self, encrypted_data):
+        self.position = 0  # сброс позиции для дешифровки
         return self.encrypt(encrypted_data)
 
 def interactive_cipher():
