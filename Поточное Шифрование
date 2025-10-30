@@ -38,13 +38,13 @@ def interactive_cipher():
     if mode == 'e':
         message = input("Введите сообщение для шифрования: \n")
         encrypted = cipher.encrypt(message)
-        print(f"\nЗашифрованное (в hex): {encrypted.hex()}")
+        print(f"Зашифрованное (в hex): \n{encrypted.hex()}")
         
     elif mode == 'd':
         hex_data = input("Введите зашифрованный текст в hex: \n").strip()
         encrypted = bytes.fromhex(hex_data)
         decrypted = cipher.decrypt(encrypted)
-        print(f"\nРасшифрованное сообщение: {decrypted.decode(errors='replace')}")
+        print(f"Расшифрованное сообщение: \n{decrypted.decode(errors='replace')}")
 
     else:
         print("Неверный выбор режима (используйте 'e' или 'd').")
