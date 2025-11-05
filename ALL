@@ -1,0 +1,865 @@
+import struct
+import math
+import hashlib
+import secrets
+import binascii
+import random
+import os
+
+# ==================== ХЕШ-ФУНКЦИИ ====================
+
+class SHA256:
+    def __init__(self):
+        self.h = [
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+        ]
+        
+        self.k = [
+            0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+            0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+            0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+            0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+            0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+            0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+            0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+            0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+        ]
+        
+    def _rotr(self, n, x):
+        return ((x >> n) | (x << (32 - n))) & 0xFFFFFFFF
+    
+    def _shr(self, n, x):
+        return (x >> n) & 0xFFFFFFFF
+    
+    def _ch(self, x, y, z):
+        return (x & y) ^ (~x & z)
+    
+    def _maj(self, x, y, z):
+        return (x & y) ^ (x & z) ^ (y & z)
+    
+    def _sigma0(self, x):
+        return self._rotr(2, x) ^ self._rotr(13, x) ^ self._rotr(22, x)
+    
+    def _sigma1(self, x):
+        return self._rotr(6, x) ^ self._rotr(11, x) ^ self._rotr(25, x)
+    
+    def _gamma0(self, x):
+        return self._rotr(7, x) ^ self._rotr(18, x) ^ self._shr(3, x)
+    
+    def _gamma1(self, x):
+        return self._rotr(17, x) ^ self._rotr(19, x) ^ self._shr(10, x)
+    
+    def _pad_message(self, message):
+        if isinstance(message, str):
+            message = message.encode('utf-8')
+        
+        length = len(message) * 8
+        message += b'\x80'
+        
+        while (len(message) * 8) % 512 != 448:
+            message += b'\x00'
+        
+        message += struct.pack('>Q', length)
+        return message
+    
+    def _process_block(self, block):
+        if len(block) != 64:
+            raise ValueError("Block must be exactly 64 bytes (512 bits)")
+            
+        w = list(struct.unpack('>16I', block))
+        
+        for i in range(16, 64):
+            s0 = self._gamma0(w[i-15])
+            s1 = self._gamma1(w[i-2])
+            w.append((w[i-16] + s0 + w[i-7] + s1) & 0xFFFFFFFF)
+        
+        a, b, c, d, e, f, g, h = self.h
+        
+        for i in range(64):
+            s1 = self._sigma1(e)
+            ch = self._ch(e, f, g)
+            temp1 = (h + s1 + ch + self.k[i] + w[i]) & 0xFFFFFFFF
+            s0 = self._sigma0(a)
+            maj = self._maj(a, b, c)
+            temp2 = (s0 + maj) & 0xFFFFFFFF
+            
+            h = g
+            g = f
+            f = e
+            e = (d + temp1) & 0xFFFFFFFF
+            d = c
+            c = b
+            b = a
+            a = (temp1 + temp2) & 0xFFFFFFFF
+        
+        self.h[0] = (self.h[0] + a) & 0xFFFFFFFF
+        self.h[1] = (self.h[1] + b) & 0xFFFFFFFF
+        self.h[2] = (self.h[2] + c) & 0xFFFFFFFF
+        self.h[3] = (self.h[3] + d) & 0xFFFFFFFF
+        self.h[4] = (self.h[4] + e) & 0xFFFFFFFF
+        self.h[5] = (self.h[5] + f) & 0xFFFFFFFF
+        self.h[6] = (self.h[6] + g) & 0xFFFFFFFF
+        self.h[7] = (self.h[7] + h) & 0xFFFFFFFF
+    
+    def hash(self, data):
+        if isinstance(data, str):
+            data = data.encode('utf-8')
+        
+        self.h = [
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+        ]
+        
+        padded_data = self._pad_message(data)
+        
+        for i in range(0, len(padded_data), 64):
+            block = padded_data[i:i+64]
+            if len(block) == 64:
+                self._process_block(block)
+        
+        return b''.join(struct.pack('>I', h) for h in self.h)
+    
+    def hexdigest(self, data):
+        return self.hash(data).hex()
+
+class SimpleHash:
+    def __init__(self, output_bits=256):
+        self.output_bits = output_bits
+        self.output_bytes = output_bits // 8
+        
+    def hash(self, data):
+        if isinstance(data, str):
+            data = data.encode()
+        hash_val = bytearray(b'\x00' * self.output_bytes)
+        for i in range(0, len(data), self.output_bytes):
+            block = data[i:i + self.output_bytes]
+            block = block.ljust(self.output_bytes, b'\x00')
+            for j in range(self.output_bytes):
+                hash_val[j] ^= block[j]
+                hash_val[j] = ((hash_val[j] << 3) | (hash_val[j] >> 5)) & 0xFF
+        for _ in range(3):
+            for j in range(self.output_bytes):
+                hash_val[j] = (hash_val[j] + hash_val[(j + 1) % self.output_bytes]) & 0xFF
+                hash_val[j] = ((hash_val[j] << 5) | (hash_val[j] >> 3)) & 0xFF
+        return bytes(hash_val)
+
+# ==================== ПАДДИНГ ====================
+
+class PKCS7Padding:
+    """Реализация паддинга PKCS7"""
+    
+    @staticmethod
+    def pad(data, block_size):
+        padding_length = block_size - (len(data) % block_size)
+        if padding_length == 0:
+            padding_length = block_size
+        return data + bytes([padding_length] * padding_length)
+    
+    @staticmethod
+    def unpad(data):
+        padding_length = data[-1]
+        if padding_length > len(data):
+            raise ValueError("Неверный паддинг")
+        return data[:-padding_length]
+
+# ==================== ПОТОЧНЫЕ ШИФРЫ ====================
+
+class StreamCipher:
+    def __init__(self, key):
+        self.key = key
+        self.position = 0
+        self.hasher = SimpleHash(256)
+
+    def _reset_position(self):
+        self.position = 0
+
+    def _key_stream(self, length):
+        result = b''
+        while len(result) < length:
+            data = self.key + str(self.position).encode()
+            hash_val = self.hasher.hash(data)
+            result += hash_val
+            self.position += 1
+        return result[:length]
+
+    def encrypt(self, data):
+        if isinstance(data, str):
+            data = data.encode()
+        self._reset_position()
+        key_stream = self._key_stream(len(data))
+        encrypted = bytes([data[i] ^ key_stream[i] for i in range(len(data))])
+        return encrypted
+
+    def decrypt(self, encrypted_data):
+        self._reset_position()
+        return self.encrypt(encrypted_data)
+
+class LFSRCipher:
+    """Поточный шифр на основе регистра сдвига с обратной связью"""
+    
+    def __init__(self, key):
+        self.key = key
+        self.state = int.from_bytes(hashlib.sha256(key).digest()[:8], 'big')
+        # Примитивный полином для 64-битного LFSR: x^64 + x^63 + x^61 + x^60 + 1
+        self.poly = 0xD800000000000000
+    
+    def _lfsr_step(self):
+        feedback = 0
+        if self.state & 0x8000000000000000:
+            feedback ^= 1
+        if self.state & 0x4000000000000000:
+            feedback ^= 1
+        if self.state & 0x2000000000000000:
+            feedback ^= 1
+        if self.state & 0x1000000000000000:
+            feedback ^= 1
+        
+        self.state = ((self.state << 1) | feedback) & 0xFFFFFFFFFFFFFFFF
+    
+    def _key_stream(self, length):
+        stream = bytearray()
+        for _ in range(length):
+            stream.append(self.state & 0xFF)
+            for _ in range(8):
+                self._lfsr_step()
+        return bytes(stream)
+    
+    def encrypt(self, data):
+        if isinstance(data, str):
+            data = data.encode()
+        key_stream = self._key_stream(len(data))
+        return bytes([data[i] ^ key_stream[i] for i in range(len(data))])
+    
+    def decrypt(self, encrypted_data):
+        self.state = int.from_bytes(hashlib.sha256(self.key).digest()[:8], 'big')
+        return self.encrypt(encrypted_data)
+
+# ==================== БЛОЧНЫЕ ШИФРЫ ====================
+
+class FeistelNetwork:
+    def __init__(self, key, rounds=16):
+        self.key = key
+        self.rounds = rounds
+        self.position = 0
+        self.hasher = SimpleHash(256)
+
+    def _reset_position(self):
+        self.position = 0
+
+    def _key_stream(self, length):
+        result = b''
+        while len(result) < length:
+            data = self.key + str(self.position).encode()
+            hash_val = self.hasher.hash(data)
+            result += hash_val
+            self.position += 1
+        return result[:length]
+
+    def _f_function(self, right_block, round_key):
+        block_bytes = right_block.to_bytes(4, 'big')
+        mixed = bytes([block_bytes[i] ^ round_key[i % len(round_key)] for i in range(len(block_bytes))])
+        result = self.hasher.hash(mixed)
+        return int.from_bytes(result[:4], 'big')
+
+    def _split_blocks(self, data):
+        blocks = []
+        for i in range(0, len(data), 8):
+            block = data[i:i+8]
+            if len(block) < 8:
+                block = block + b'\x00' * (8 - len(block))
+            blocks.append(block)
+        return blocks
+
+    def encrypt(self, data):
+        if isinstance(data, str):
+            data = data.encode()
+            
+        self._reset_position()
+        blocks = self._split_blocks(data)
+        encrypted_blocks = []
+        
+        for block in blocks:
+            left = int.from_bytes(block[:4], 'big')
+            right = int.from_bytes(block[4:], 'big')
+            
+            round_keys = self._key_stream(self.rounds * 4)
+            
+            for round_num in range(self.rounds):
+                round_key = round_keys[round_num*4:(round_num+1)*4]
+                temp = right
+                f_result = self._f_function(right, round_key)
+                right = left ^ f_result
+                left = temp
+            
+            encrypted_block = left.to_bytes(4, 'big') + right.to_bytes(4, 'big')
+            encrypted_blocks.append(encrypted_block)
+        
+        return b''.join(encrypted_blocks)
+
+    def decrypt(self, encrypted_data):
+        self._reset_position()
+        blocks = self._split_blocks(encrypted_data)
+        decrypted_blocks = []
+        
+        for block in blocks:
+            left = int.from_bytes(block[:4], 'big')
+            right = int.from_bytes(block[4:], 'big')
+            
+            round_keys = self._key_stream(self.rounds * 4)
+            
+            for round_num in range(self.rounds-1, -1, -1):
+                round_key = round_keys[round_num*4:(round_num+1)*4]
+                temp = left
+                f_result = self._f_function(left, round_key)
+                left = right ^ f_result
+                right = temp
+            
+            decrypted_block = left.to_bytes(4, 'big') + right.to_bytes(4, 'big')
+            decrypted_blocks.append(decrypted_block)
+        
+        return b''.join(decrypted_blocks)
+
+class SPN:
+    def __init__(self, key, rounds=4, block_size=16):
+        self.key = key
+        self.rounds = rounds
+        self.block_size = block_size
+        self.position = 0
+
+    def _reset_position(self):
+        self.position = 0
+
+    def _key_stream(self, length):
+        result = b''
+        while len(result) < length:
+            data = self.key + str(self.position).encode()
+            hash_val = hashlib.sha256(data).digest()
+            result += hash_val
+            self.position += 1
+        return result[:length]
+
+    def _generate_round_keys(self):
+        total_keys_needed = (self.rounds + 1) * self.block_size
+        key_material = self._key_stream(total_keys_needed)
+        
+        round_keys = []
+        for i in range(self.rounds + 1):
+            start = i * self.block_size
+            end = start + self.block_size
+            round_keys.append(key_material[start:end])
+        
+        return round_keys
+
+    def _s_box(self, byte):
+        s_box_data = hashlib.sha256(b's_box_' + bytes([byte])).digest()
+        return s_box_data[0]
+
+    def _inverse_s_box(self, byte):
+        for i in range(256):
+            if self._s_box(i) == byte:
+                return i
+        return byte
+
+    def _substitute_bytes(self, data):
+        return bytes([self._s_box(b) for b in data])
+
+    def _inverse_substitute_bytes(self, data):
+        return bytes([self._inverse_s_box(b) for b in data])
+
+    def _permute_bits(self, data):
+        bits = []
+        for byte in data:
+            bits.extend([(byte >> i) & 1 for i in range(7, -1, -1)])
+        
+        permuted_bits = bits[4:] + bits[:4]
+        
+        result = bytearray()
+        for i in range(0, len(permuted_bits), 8):
+            byte = 0
+            for j in range(8):
+                if i + j < len(permuted_bits):
+                    byte = (byte << 1) | permuted_bits[i + j]
+            result.append(byte)
+        
+        return bytes(result)
+
+    def _inverse_permute_bits(self, data):
+        bits = []
+        for byte in data:
+            bits.extend([(byte >> i) & 1 for i in range(7, -1, -1)])
+        
+        inverse_permuted_bits = bits[-4:] + bits[:-4]
+        
+        result = bytearray()
+        for i in range(0, len(inverse_permuted_bits), 8):
+            byte = 0
+            for j in range(8):
+                if i + j < len(inverse_permuted_bits):
+                    byte = (byte << 1) | inverse_permuted_bits[i + j]
+            result.append(byte)
+        
+        return bytes(result)
+
+    def _split_blocks(self, data):
+        blocks = []
+        for i in range(0, len(data), self.block_size):
+            block = data[i:i + self.block_size]
+            if len(block) < self.block_size:
+                block = block + b'\x00' * (self.block_size - len(block))
+            blocks.append(block)
+        return blocks
+
+    def encrypt(self, data):
+        if isinstance(data, str):
+            data = data.encode()
+            
+        self._reset_position()
+        round_keys = self._generate_round_keys()
+        blocks = self._split_blocks(data)
+        encrypted_blocks = []
+        
+        for block in blocks:
+            current_state = block
+            
+            for round_num in range(self.rounds):
+                current_state = bytes([current_state[i] ^ round_keys[round_num][i] 
+                                     for i in range(len(current_state))])
+                
+                current_state = self._substitute_bytes(current_state)
+                
+                if round_num < self.rounds - 1:
+                    current_state = self._permute_bits(current_state)
+            
+            current_state = bytes([current_state[i] ^ round_keys[self.rounds][i] 
+                                 for i in range(len(current_state))])
+            
+            encrypted_blocks.append(current_state)
+        
+        return b''.join(encrypted_blocks)
+
+    def decrypt(self, encrypted_data):
+        self._reset_position()
+        round_keys = self._generate_round_keys()
+        blocks = self._split_blocks(encrypted_data)
+        decrypted_blocks = []
+        
+        for block in blocks:
+            current_state = block
+            
+            current_state = bytes([current_state[i] ^ round_keys[self.rounds][i] 
+                                 for i in range(len(current_state))])
+            
+            for round_num in range(self.rounds - 1, -1, -1):
+                if round_num < self.rounds - 1:
+                    current_state = self._inverse_permute_bits(current_state)
+                
+                current_state = self._inverse_substitute_bytes(current_state)
+                
+                current_state = bytes([current_state[i] ^ round_keys[round_num][i] 
+                                     for i in range(len(current_state))])
+            
+            decrypted_blocks.append(current_state)
+        
+        return b''.join(decrypted_blocks)
+
+# ==================== РЕЖИМЫ ШИФРОВАНИЯ ====================
+
+class CBCMode:
+    """Реализация режима CBC"""
+    
+    def __init__(self, cipher, iv=None):
+        self.cipher = cipher
+        self.block_size = 16
+        self.iv = iv or os.urandom(self.block_size)
+    
+    def encrypt(self, data):
+        data = PKCS7Padding.pad(data, self.block_size)
+        blocks = [data[i:i+self.block_size] for i in range(0, len(data), self.block_size)]
+        
+        encrypted_blocks = []
+        prev_block = self.iv
+        
+        for block in blocks:
+            xored = bytes([block[i] ^ prev_block[i] for i in range(self.block_size)])
+            encrypted_block = self.cipher.encrypt(xored)
+            encrypted_blocks.append(encrypted_block)
+            prev_block = encrypted_block
+        
+        return self.iv + b''.join(encrypted_blocks)
+    
+    def decrypt(self, encrypted_data):
+        iv = encrypted_data[:self.block_size]
+        encrypted_blocks = [encrypted_data[i:i+self.block_size] 
+                          for i in range(self.block_size, len(encrypted_data), self.block_size)]
+        
+        decrypted_blocks = []
+        prev_block = iv
+        
+        for block in encrypted_blocks:
+            decrypted_block = self.cipher.decrypt(block)
+            xored = bytes([decrypted_block[i] ^ prev_block[i] for i in range(self.block_size)])
+            decrypted_blocks.append(xored)
+            prev_block = block
+        
+        return PKCS7Padding.unpad(b''.join(decrypted_blocks))
+
+# ==================== АСИММЕТРИЧНОЕ ШИФРОВАНИЕ ====================
+
+class RSA:
+    """Реализация RSA шифрования"""
+    
+    def __init__(self, key_size=1024):
+        self.key_size = key_size
+        self.p = self.q = self.n = self.e = self.d = None
+    
+    def _is_prime(self, n, k=20):
+        if n < 2:
+            return False
+        if n in (2, 3):
+            return True
+        if n % 2 == 0:
+            return False
+        
+        r, d = 0, n - 1
+        while d % 2 == 0:
+            r += 1
+            d //= 2
+        
+        for _ in range(k):
+            a = random.randint(2, n - 2)
+            x = pow(a, d, n)
+            if x == 1 or x == n - 1:
+                continue
+            for _ in range(r - 1):
+                x = pow(x, 2, n)
+                if x == n - 1:
+                    break
+            else:
+                return False
+        return True
+    
+    def _generate_prime(self, bits):
+        while True:
+            p = random.getrandbits(bits)
+            p |= (1 << (bits - 1)) | 1
+            if self._is_prime(p):
+                return p
+    
+    def _mod_inverse(self, a, m):
+        def extended_gcd(a, b):
+            if b == 0:
+                return a, 1, 0
+            gcd, x1, y1 = extended_gcd(b, a % b)
+            x = y1
+            y = x1 - (a // b) * y1
+            return gcd, x, y
+        
+        gcd, x, _ = extended_gcd(a, m)
+        if gcd != 1:
+            raise ValueError("Обратный элемент не существует")
+        return x % m
+    
+    def generate_key_pair(self):
+        p_bits = self.key_size // 2
+        self.p = self._generate_prime(p_bits)
+        self.q = self._generate_prime(p_bits)
+        
+        self.n = self.p * self.q
+        phi = (self.p - 1) * (self.q - 1)
+        
+        self.e = 65537
+        while math.gcd(self.e, phi) != 1:
+            self.e += 2
+        
+        self.d = self._mod_inverse(self.e, phi)
+        
+        public_key = (self.n, self.e)
+        private_key = (self.n, self.d)
+        
+        return public_key, private_key
+    
+    def encrypt(self, message, public_key):
+        n, e = public_key
+        if isinstance(message, str):
+            message = message.encode()
+        
+        m = int.from_bytes(message, 'big')
+        if m >= n:
+            raise ValueError("Сообщение слишком большое")
+        
+        c = pow(m, e, n)
+        return c.to_bytes((c.bit_length() + 7) // 8, 'big')
+    
+    def decrypt(self, encrypted_data, private_key):
+        n, d = private_key
+        c = int.from_bytes(encrypted_data, 'big')
+        m = pow(c, d, n)
+        return m.to_bytes((m.bit_length() + 7) // 8, 'big').rstrip(b'\x00')
+
+# ==================== ЭЛЕКТРОННАЯ ПОДПИСЬ ====================
+
+class EllipticCurve:
+    def __init__(self):
+        self.p = 2**255 - 19
+        self.a = -1
+        self.b = 0
+        self.G = (9, 14781619447589544791020593568409986887264606134616475288964881837755586237401)
+        self.n = 2**252 + 27742317777372353535851937790883648493
+    
+    def mod_inverse(self, a, p):
+        return pow(a, p-2, p)
+    
+    def point_add(self, P1, P2):
+        if P1 is None:
+            return P2
+        if P2 is None:
+            return P1
+            
+        x1, y1 = P1
+        x2, y2 = P2
+        
+        if x1 == x2:
+            if y1 == y2:
+                s = (3 * x1 * x1 + self.a) * self.mod_inverse(2 * y1, self.p) % self.p
+            else:
+                return None
+        else:
+            s = (y2 - y1) * self.mod_inverse(x2 - x1, self.p) % self.p
+        
+        x3 = (s * s - x1 - x2) % self.p
+        y3 = (s * (x1 - x3) - y1) % self.p
+        
+        return (x3, y3)
+    
+    def point_multiply(self, k, P):
+        if k == 0:
+            return None
+        if k == 1:
+            return P
+            
+        result = None
+        addend = P
+        
+        while k:
+            if k & 1:
+                result = self.point_add(result, addend)
+            addend = self.point_add(addend, addend)
+            k >>= 1
+            
+        return result
+
+class DigitalSignature:
+    def __init__(self):
+        self.curve = EllipticCurve()
+        self.sha256 = SHA256()
+    
+    def generate_key_pair(self):
+        private_key = secrets.randbelow(self.curve.n - 1) + 1
+        public_key = self.curve.point_multiply(private_key, self.curve.G)
+        return private_key, public_key
+    
+    def sign(self, message, private_key):
+        message_hash = int.from_bytes(self.sha256.hash(message), byteorder='big')
+        message_hash = message_hash % self.curve.n
+        
+        while True:
+            k = secrets.randbelow(self.curve.n - 1) + 1
+            R = self.curve.point_multiply(k, self.curve.G)
+            if R is None:
+                continue
+                
+            r = R[0] % self.curve.n
+            if r == 0:
+                continue
+            
+            k_inv = self.curve.mod_inverse(k, self.curve.n)
+            s = (k_inv * (message_hash + r * private_key)) % self.curve.n
+            
+            if s != 0:
+                break
+        
+        return (r, s)
+    
+    def verify(self, message, signature, public_key):
+        r, s = signature
+        
+        if not (1 <= r < self.curve.n and 1 <= s < self.curve.n):
+            return False
+        
+        message_hash = int.from_bytes(self.sha256.hash(message), byteorder='big')
+        message_hash = message_hash % self.curve.n
+        
+        w = self.curve.mod_inverse(s, self.curve.n)
+        u1 = (message_hash * w) % self.curve.n
+        u2 = (r * w) % self.curve.n
+        
+        X1 = self.curve.point_multiply(u1, self.curve.G)
+        X2 = self.curve.point_multiply(u2, public_key)
+        X = self.curve.point_add(X1, X2)
+        
+        if X is None:
+            return False
+        
+        return (X[0] % self.curve.n) == r
+    
+    def signature_to_string(self, signature):
+        r, s = signature
+        return f"{r:064x}{s:064x}"
+    
+    def string_to_signature(self, sig_str):
+        if len(sig_str) != 128:
+            raise ValueError("Invalid signature string length")
+        r = int(sig_str[:64], 16)
+        s = int(sig_str[64:], 16)
+        return (r, s)
+    
+    def public_key_to_string(self, public_key):
+        x, y = public_key
+        return f"{x:064x}{y:064x}"
+    
+    def string_to_public_key(self, key_str):
+        if len(key_str) != 128:
+            raise ValueError("Invalid public key string length")
+        x = int(key_str[:64], 16)
+        y = int(key_str[64:], 16)
+        return (x, y)
+
+# ==================== ГЛАВНОЕ МЕНЮ И ИНТЕРФЕЙС ====================
+
+def main_menu():
+    """Главное меню криптографической системы"""
+    
+    while True:
+        print("\n" + "="*60)
+        print("🎯 КОМПЛЕКСНАЯ КРИПТОГРАФИЧЕСКАЯ СИСТЕМА")
+        print("="*60)
+        print("1. 🔐 СИММЕТРИЧНОЕ ШИФРОВАНИЕ")
+        print("   ├─ Поточные шифры")
+        print("   ├─ Блочные шифры") 
+        print("   └─ Режимы шифрования")
+        print("2. 🔑 АСИММЕТРИЧНОЕ ШИФРОВАНИЕ (RSA)")
+        print("3. 📝 ЭЛЕКТРОННАЯ ПОДПИСЬ (ЭЦП)")
+        print("4. #️⃣ ХЕШ-ФУНКЦИИ")
+        print("5. 🧪 ТЕСТИРОВАНИЕ ВСЕХ АЛГОРИТМОВ")
+        print("6. 🚪 ВЫХОД")
+        
+        choice = input("\n📋 Выберите категорию (1-6): ").strip()
+        
+        if choice == '1':
+            symmetric_menu()
+        elif choice == '2':
+            asymmetric_menu()
+        elif choice == '3':
+            digital_signature_menu()
+        elif choice == '4':
+            hash_menu()
+        elif choice == '5':
+            test_all_algorithms()
+        elif choice == '6':
+            print("👋 Выход из программы...")
+            break
+        else:
+            print("❌ Неверный выбор!")
+
+def symmetric_menu():
+    """Меню симметричного шифрования"""
+    while True:
+        print("\n" + "="*50)
+        print("🔐 СИММЕТРИЧНОЕ ШИФРОВАНИЕ")
+        print("="*50)
+        print("1. 📊 Поточные шифры")
+        print("2. 🧱 Блочные шифры")
+        print("3. 🔄 Режим CBC")
+        print("4. ↩️ Назад")
+        
+        choice = input("\nВыберите тип (1-4): ").strip()
+        
+        if choice == '1':
+            stream_cipher_menu()
+        elif choice == '2':
+            block_cipher_menu()
+        elif choice == '3':
+            cbc_mode_menu()
+        elif choice == '4':
+            break
+        else:
+            print("❌ Неверный выбор!")
+
+def stream_cipher_menu():
+    """Меню поточных шифров"""
+    print("\n--- 📊 ПОТОЧНЫЕ ШИФРЫ ---")
+    mode = input("Шифровать (e) или дешифровать (d)? ").strip().lower()
+    key = input("Введите ключ: ").encode()
+    
+    print("\nВыберите алгоритм:")
+    print("1. StreamCipher (на основе хеша)")
+    print("2. LFSR (регистр сдвига)")
+    
+    algo_choice = input("Ваш выбор (1-2): ").strip()
+    
+    if algo_choice == '1':
+        cipher = StreamCipher(key)
+        algo_name = "StreamCipher"
+    elif algo_choice == '2':
+        cipher = LFSRCipher(key)
+        algo_name = "LFSR"
+    else:
+        print("❌ Неверный выбор!")
+        return
+    
+    if mode == 'e':
+        message = input("Введите сообщение: ")
+        encrypted = cipher.encrypt(message)
+        print(f"\n✅ Зашифровано с помощью {algo_name}:")
+        print(f"HEX: {encrypted.hex()}")
+        print(f"Размер: {len(encrypted)} байт")
+        
+    elif mode == 'd':
+        hex_data = input("Введите HEX данные: ").strip()
+        try:
+            encrypted = bytes.fromhex(hex_data)
+            decrypted = cipher.decrypt(encrypted)
+            print(f"\n✅ Расшифровано с помощью {algo_name}:")
+            print(f"Текст: {decrypted.decode(errors='replace')}")
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+
+def block_cipher_menu():
+    """Меню блочных шифров"""
+    print("\n--- 🧱 БЛОЧНЫЕ ШИФРЫ ---")
+    mode = input("Шифровать (e) или дешифровать (d)? ").strip().lower()
+    key = input("Введите ключ: ").encode()
+    
+    print("\nВыберите алгоритм:")
+    print("1. SPN (Substitution-Permutation Network)")
+    print("2. Сеть Фейстеля")
+    
+    algo_choice = input("Ваш выбор (1-2): ").strip()
+    
+    if algo_choice == '1':
+        rounds = int(input("Количество раундов (по умолчанию 4): ") or "4")
+        cipher = SPN(key, rounds)
+        algo_name = f"SPN ({rounds} раундов)"
+    elif algo_choice == '2':
+        rounds = int(input("Количество раундов (по умолчанию 16): ") or "16")
+        cipher = FeistelNetwork(key, rounds)
+        algo_name = f"Фейстель ({rounds} раундов)"
+    else:
+        print("❌ Неверный выбор!")
+        return
+    
+    if mode == 'e':
+        message = input("Введите сообщение: ")
+        encrypted = cipher.encrypt(message)
+        print(f"\n✅ Зашифровано с помощью {algo_name}:")
+        print(f"HEX: {encrypted.hex()}")
+        print(f"Размер: {len(encrypted)} байт")
+        
+    elif mode == 'd':
+        hex_data = input("Введите HEX данные: ").strip()
+        try:
+            encrypted = bytes.fromhex(hex_data)
+            decrypted = cipher.decrypt(encrypted)
+            # Убираем паддинг для блочных шифров
+            decrypted_clean = decrypted
