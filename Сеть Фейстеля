@@ -1,110 +1,56 @@
 import hashlib
 
-class FeistelNetwork:
-    def __init__(self, key, rounds=16):
-        self.key = key
-        self.rounds = rounds
-        self.position = 0
 
-    def _reset_position(self):
-        """Сброс позиции для начала нового шифрования/дешифрования"""
-        self.position = 0
+class CBCMode:
+    """Реализация режима CBC для 128-битных блоков"""
 
-    def _key_stream(self, length):
-        """Генератор ключевого потока на основе SHA-256"""
-        result = b''
-        while len(result) < length:
-            data = self.key + str(self.position).encode()
-            hash_val = hashlib.sha256(data).digest()
-            result += hash_val
-            self.position += 1
-        return result[:length]
-
-    def _f_function(self, right_block, round_key):
-        """F-функция: преобразует правый блок с использованием ключа раунда"""
-        # Преобразуем блок в байты
-        block_bytes = right_block.to_bytes(4, 'big')
-        
-        # XOR с ключом раунда и хешируем
-        mixed = bytes([block_bytes[i] ^ round_key[i % len(round_key)] for i in range(len(block_bytes))])
-        result = hashlib.sha256(mixed).digest()
-        
-        # Возвращаем первые 4 байта как int
-        return int.from_bytes(result[:4], 'big')
-
-    def _split_blocks(self, data):
-        """Разделяем данные на блоки по 8 байт"""
-        blocks = []
-        for i in range(0, len(data), 8):
-            block = data[i:i+8]
-            # Дополняем последний блок если нужно
-            if len(block) < 8:
-                block = block + b'\x00' * (8 - len(block))
-            blocks.append(block)
-        return blocks
+    def __init__(self, cipher, iv=None):
+        self.cipher = cipher
+        self.block_size = 16  # 128 бит
+        self.iv = iv or os.urandom(self.block_size)
 
     def encrypt(self, data):
-        """Шифрование с использованием сети Фейстеля"""
-        if isinstance(data, str):
-            data = data.encode()
-            
-        self._reset_position()  # Сбрасываем позицию перед шифрованием
-        blocks = self._split_blocks(data)
+        # Дополняем данные до размера блока
+        padding_length = self.block_size - (len(data) % self.block_size)
+        if padding_length == 0:
+            padding_length = self.block_size
+        data = data + bytes([padding_length] * padding_length)
+
+        blocks = [data[i:i + self.block_size] for i in range(0, len(data), self.block_size)]
+
         encrypted_blocks = []
-        
+        prev_block = self.iv
+
         for block in blocks:
-            # Разделяем блок на две части по 4 байта
-            left = int.from_bytes(block[:4], 'big')
-            right = int.from_bytes(block[4:], 'big')
-            
-            # Генерируем ключи для всех раундов
-            round_keys = self._key_stream(self.rounds * 4)  # 4 байта на раунд
-            
-            # Выполняем раунды Фейстеля
-            for round_num in range(self.rounds):
-                round_key = round_keys[round_num*4:(round_num+1)*4]
-                
-                # Основная операция Фейстеля
-                temp = right
-                f_result = self._f_function(right, round_key)
-                right = left ^ f_result
-                left = temp
-            
-            # Объединяем финальные блоки
-            encrypted_block = left.to_bytes(4, 'big') + right.to_bytes(4, 'big')
+            xored = bytes([block[i] ^ prev_block[i] for i in range(self.block_size)])
+            encrypted_block = self.cipher.encrypt(xored)
             encrypted_blocks.append(encrypted_block)
-        
-        return b''.join(encrypted_blocks)
+            prev_block = encrypted_block
+
+        return self.iv + b''.join(encrypted_blocks)
 
     def decrypt(self, encrypted_data):
-        """Дешифрование с использованием сети Фейстеля"""
-        self._reset_position()  # Сбрасываем позицию перед дешифрованием
-        blocks = self._split_blocks(encrypted_data)
+        iv = encrypted_data[:self.block_size]
+        encrypted_blocks = [encrypted_data[i:i + self.block_size]
+                            for i in range(self.block_size, len(encrypted_data), self.block_size)]
+
         decrypted_blocks = []
-        
-        for block in blocks:
-            # Разделяем блок на две части
-            left = int.from_bytes(block[:4], 'big')
-            right = int.from_bytes(block[4:], 'big')
-            
-            # Генерируем ключи для всех раундов (те же самые)
-            round_keys = self._key_stream(self.rounds * 4)
-            
-            # Выполняем раунды Фейстеля в обратном порядке
-            for round_num in range(self.rounds-1, -1, -1):
-                round_key = round_keys[round_num*4:(round_num+1)*4]
-                
-                # Обратная операция Фейстеля
-                temp = left
-                f_result = self._f_function(left, round_key)
-                left = right ^ f_result
-                right = temp
-            
-            # Объединяем блоки
-            decrypted_block = left.to_bytes(4, 'big') + right.to_bytes(4, 'big')
-            decrypted_blocks.append(decrypted_block)
-        
-        return b''.join(decrypted_blocks)
+        prev_block = iv
+
+        for block in encrypted_blocks:
+            decrypted_block = self.cipher.decrypt(block)
+            xored = bytes([decrypted_block[i] ^ prev_block[i] for i in range(self.block_size)])
+            decrypted_blocks.append(xored)
+            prev_block = block
+
+        # Убираем паддинг
+        padding_length = decrypted_blocks[-1][-1]
+        if padding_length <= self.block_size:
+            result = b''.join(decrypted_blocks)
+            return result[:-padding_length]
+        else:
+            return b''.join(decrypted_blocks)
+
 
 class StreamCipher:
     def __init__(self, key):
@@ -136,18 +82,19 @@ class StreamCipher:
         self._reset_position()  # Сбрасываем позицию
         return self.encrypt(encrypted_data)
 
+
 def interactive_cipher():
     print("=== Сравнение поточного шифра и сети Фейстеля ===")
-    
+
     while True:
         print("\nВыберите алгоритм:")
         print("1. Поточный шифр (XOR)")
         print("2. Сеть Фейстеля (блочный)")
         print("3. Тестирование обоих алгоритмов")
         print("4. Выйти")
-        
+
         algo_choice = input("Ваш выбор (1-4): ").strip()
-        
+
         if algo_choice == '4':
             print("Выход...")
             break
@@ -157,19 +104,19 @@ def interactive_cipher():
         elif algo_choice not in ['1', '2']:
             print("Неверный выбор алгоритма!")
             continue
-            
+
         mode = input("Вы хотите зашифровать (e) или расшифровать (d)? ").strip().lower()
-        
+
         if mode not in ['e', 'd']:
             print("Неверный выбор режима!")
             continue
-            
+
         key_input = input("Введите ключ: ")
         if not key_input:
             print("Ключ не может быть пустым!")
             continue
         key = key_input.encode()
-        
+
         if algo_choice == '1':
             cipher = StreamCipher(key)
             algo_name = "поточный шифр"
@@ -178,81 +125,82 @@ def interactive_cipher():
             rounds = int(rounds_input) if rounds_input else 16
             cipher = FeistelNetwork(key, rounds)
             algo_name = f"сеть Фейстеля ({rounds} раундов)"
-        
+
         if mode == 'e':
             message = input("Введите сообщение для шифрования: ")
             if not message:
                 print("Сообщение не может быть пустым!")
                 continue
-                
+
             print(f"\nШифруем с помощью {algo_name}...")
             encrypted = cipher.encrypt(message)
             print(f"Зашифрованное (hex): {encrypted.hex()}")
             print(f"Длина: {len(encrypted)} байт")
-            
+
         else:  # mode == 'd'
             hex_data = input("Введите зашифрованный текст в hex: ").strip()
             if not hex_data:
                 print("Данные не могут быть пустыми!")
                 continue
-                
+
             try:
                 encrypted = bytes.fromhex(hex_data)
                 print(f"\nДешифруем с помощью {algo_name}...")
                 decrypted = cipher.decrypt(encrypted)
-                
+
                 # Для сети Фейстеля убираем дополняющие нули
                 if algo_choice == '2':
                     decrypted = decrypted.rstrip(b'\x00')
-                
+
                 print(f"Расшифрованное сообщение: {decrypted.decode(errors='replace')}")
-                
+
             except ValueError as e:
                 print(f"Ошибка: неверный hex формат! {e}")
             except Exception as e:
                 print(f"Ошибка при дешифровании: {e}")
 
+
 def test_both_algorithms():
     """Тестирование обоих алгоритмов - теперь с вводом сообщения"""
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
     print("ТЕСТИРОВАНИЕ АЛГОРИТМОВ")
-    print("="*50)
-    
+    print("=" * 50)
+
     # Теперь сообщение вводится пользователем!
     message = input("Введите тестовое сообщение: ")
     if not message:
         print("Сообщение не может быть пустым!")
         return
-        
+
     key_input = input("Введите ключ для теста (или нажмите Enter для ключа по умолчанию b'test_key'): ")
     key = key_input.encode() if key_input else b"test_key"
-    
+
     rounds_input = input("Введите количество раундов для Фейстеля (по умолчанию 8): ")
     rounds = int(rounds_input) if rounds_input else 8
-    
+
     print(f"\n--- Тестовые данные ---")
     print(f"Сообщение: '{message}'")
     print(f"Длина сообщения: {len(message)} байт")
     print(f"Ключ: {key}")
     print(f"Раунды Фейстеля: {rounds}")
-    
+
     # Тестируем поточный шифр
     print(f"\n--- Поточный шифр ---")
     stream_cipher = StreamCipher(key)
     stream_encrypted = stream_cipher.encrypt(message)
     stream_decrypted = stream_cipher.decrypt(stream_encrypted)
     stream_success = stream_decrypted.decode() == message
-    
+
     print(f"Результат: {'✓ УСПЕХ' if stream_success else '✗ ОШИБКА'}")
     print(f"Зашифрованные данные (hex): {stream_encrypted.hex()}")
-    
+
     # Тестируем сеть Фейстеля
     print(f"\n--- Сеть Фейстеля ---")
     feistel = FeistelNetwork(key, rounds)
     feistel_encrypted = feistel.encrypt(message)
     feistel_decrypted = feistel.decrypt(feistel_encrypted)
     feistel_clean = feistel_decrypted.rstrip(b'\x00')
-    
+
     try:
         feistel_decoded = feistel_clean.decode()
         feistel_success = feistel_decoded == message
@@ -263,9 +211,10 @@ def test_both_algorithms():
     except Exception as e:
         print(f"Результат: ✗ ОШИБКА при декодировании")
         print(f"  Ошибка: {e}")
-    
+
     print(f"Зашифрованные данные (hex): {feistel_encrypted.hex()}")
     print(f"Размер после шифрования: {len(feistel_encrypted)} байт")
+
 
 if __name__ == "__main__":
     interactive_cipher()
