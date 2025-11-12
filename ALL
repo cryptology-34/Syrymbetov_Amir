@@ -1,10 +1,8 @@
-import struct
-import math
 import hashlib
-import secrets
-import binascii
-import random
 import os
+import struct
+import secrets
+from typing import Union
 
 # ==================== ХЕШ-ФУНКЦИИ ====================
 
@@ -144,32 +142,101 @@ class SimpleHash:
                 hash_val[j] = ((hash_val[j] << 5) | (hash_val[j] >> 3)) & 0xFF
         return bytes(hash_val)
 
-# ==================== ПАДДИНГ ====================
+# ==================== РЕЖИМЫ ШИФРОВАНИЯ ====================
 
-class PKCS7Padding:
-    """Реализация паддинга PKCS7"""
+class CBCMode:
+    """Режим CBC (Cipher Block Chaining)"""
     
-    @staticmethod
-    def pad(data, block_size):
-        padding_length = block_size - (len(data) % block_size)
+    def __init__(self, cipher, iv=None):
+        self.cipher = cipher
+        self.block_size = getattr(cipher, 'block_size', 16)
+        self.iv = iv or os.urandom(self.block_size)
+    
+    def encrypt(self, data):
+        if isinstance(data, str):
+            data = data.encode()
+            
+        padding_length = self.block_size - (len(data) % self.block_size)
         if padding_length == 0:
-            padding_length = block_size
-        return data + bytes([padding_length] * padding_length)
+            padding_length = self.block_size
+        data = data + bytes([padding_length] * padding_length)
+        
+        blocks = [data[i:i + self.block_size] for i in range(0, len(data), self.block_size)]
+        encrypted_blocks = []
+        prev_block = self.iv
+        
+        for block in blocks:
+            xored = bytes([block[i] ^ prev_block[i] for i in range(self.block_size)])
+            encrypted_block = self.cipher.encrypt(xored)
+            encrypted_blocks.append(encrypted_block)
+            prev_block = encrypted_block
+        
+        return self.iv + b''.join(encrypted_blocks)
     
-    @staticmethod
-    def unpad(data):
-        padding_length = data[-1]
-        if padding_length > len(data):
-            raise ValueError("Неверный паддинг")
-        return data[:-padding_length]
+    def decrypt(self, encrypted_data):
+        iv = encrypted_data[:self.block_size]
+        encrypted_blocks = [encrypted_data[i:i + self.block_size] 
+                          for i in range(self.block_size, len(encrypted_data), self.block_size)]
+        
+        decrypted_blocks = []
+        prev_block = iv
+        
+        for block in encrypted_blocks:
+            decrypted_block = self.cipher.decrypt(block)
+            xored = bytes([decrypted_block[i] ^ prev_block[i] for i in range(self.block_size)])
+            decrypted_blocks.append(xored)
+            prev_block = block
+        
+        result = b''.join(decrypted_blocks)
+        padding_length = result[-1]
+        if padding_length <= self.block_size:
+            return result[:-padding_length]
+        return result
 
-# ==================== ПОТОЧНЫЕ ШИФРЫ ====================
+class CTRMode:
+    """Режим CTR (Counter) - превращает блочный шифр в поточный"""
+    
+    def __init__(self, cipher, nonce=None):
+        self.cipher = cipher
+        self.block_size = getattr(cipher, 'block_size', 16)
+        self.nonce = nonce or os.urandom(8)
+    
+    def _generate_keystream(self, length):
+        keystream = b''
+        counter = 0
+        
+        while len(keystream) < length:
+            counter_block = self.nonce + counter.to_bytes(8, 'big')
+            encrypted_counter = self.cipher.encrypt(counter_block)
+            keystream += encrypted_counter
+            counter += 1
+        
+        return keystream[:length]
+    
+    def encrypt(self, data):
+        if isinstance(data, str):
+            data = data.encode()
+            
+        keystream = self._generate_keystream(len(data))
+        encrypted = bytes([data[i] ^ keystream[i] for i in range(len(data))])
+        
+        return self.nonce + encrypted
+    
+    def decrypt(self, encrypted_data):
+        nonce = encrypted_data[:8]
+        data = encrypted_data[8:]
+        
+        keystream = self._generate_keystream(len(data))
+        decrypted = bytes([data[i] ^ keystream[i] for i in range(len(data))])
+        
+        return decrypted
+
+# ==================== ШИФРЫ ====================
 
 class StreamCipher:
     def __init__(self, key):
         self.key = key
         self.position = 0
-        self.hasher = SimpleHash(256)
 
     def _reset_position(self):
         self.position = 0
@@ -178,7 +245,7 @@ class StreamCipher:
         result = b''
         while len(result) < length:
             data = self.key + str(self.position).encode()
-            hash_val = self.hasher.hash(data)
+            hash_val = hashlib.sha256(data).digest()
             result += hash_val
             self.position += 1
         return result[:length]
@@ -195,54 +262,12 @@ class StreamCipher:
         self._reset_position()
         return self.encrypt(encrypted_data)
 
-class LFSRCipher:
-    """Поточный шифр на основе регистра сдвига с обратной связью"""
-    
-    def __init__(self, key):
-        self.key = key
-        self.state = int.from_bytes(hashlib.sha256(key).digest()[:8], 'big')
-        # Примитивный полином для 64-битного LFSR: x^64 + x^63 + x^61 + x^60 + 1
-        self.poly = 0xD800000000000000
-    
-    def _lfsr_step(self):
-        feedback = 0
-        if self.state & 0x8000000000000000:
-            feedback ^= 1
-        if self.state & 0x4000000000000000:
-            feedback ^= 1
-        if self.state & 0x2000000000000000:
-            feedback ^= 1
-        if self.state & 0x1000000000000000:
-            feedback ^= 1
-        
-        self.state = ((self.state << 1) | feedback) & 0xFFFFFFFFFFFFFFFF
-    
-    def _key_stream(self, length):
-        stream = bytearray()
-        for _ in range(length):
-            stream.append(self.state & 0xFF)
-            for _ in range(8):
-                self._lfsr_step()
-        return bytes(stream)
-    
-    def encrypt(self, data):
-        if isinstance(data, str):
-            data = data.encode()
-        key_stream = self._key_stream(len(data))
-        return bytes([data[i] ^ key_stream[i] for i in range(len(data))])
-    
-    def decrypt(self, encrypted_data):
-        self.state = int.from_bytes(hashlib.sha256(self.key).digest()[:8], 'big')
-        return self.encrypt(encrypted_data)
-
-# ==================== БЛОЧНЫЕ ШИФРЫ ====================
-
 class FeistelNetwork:
     def __init__(self, key, rounds=16):
         self.key = key
         self.rounds = rounds
         self.position = 0
-        self.hasher = SimpleHash(256)
+        self.block_size = 16  # 128 бит
 
     def _reset_position(self):
         self.position = 0
@@ -251,23 +276,23 @@ class FeistelNetwork:
         result = b''
         while len(result) < length:
             data = self.key + str(self.position).encode()
-            hash_val = self.hasher.hash(data)
+            hash_val = hashlib.sha256(data).digest()
             result += hash_val
             self.position += 1
         return result[:length]
 
     def _f_function(self, right_block, round_key):
-        block_bytes = right_block.to_bytes(4, 'big')
+        block_bytes = right_block.to_bytes(8, 'big')
         mixed = bytes([block_bytes[i] ^ round_key[i % len(round_key)] for i in range(len(block_bytes))])
-        result = self.hasher.hash(mixed)
-        return int.from_bytes(result[:4], 'big')
+        result = hashlib.sha256(mixed).digest()
+        return int.from_bytes(result[:8], 'big')
 
     def _split_blocks(self, data):
         blocks = []
-        for i in range(0, len(data), 8):
-            block = data[i:i+8]
-            if len(block) < 8:
-                block = block + b'\x00' * (8 - len(block))
+        for i in range(0, len(data), self.block_size):
+            block = data[i:i + self.block_size]
+            if len(block) < self.block_size:
+                block = block + b'\x00' * (self.block_size - len(block))
             blocks.append(block)
         return blocks
 
@@ -280,19 +305,19 @@ class FeistelNetwork:
         encrypted_blocks = []
         
         for block in blocks:
-            left = int.from_bytes(block[:4], 'big')
-            right = int.from_bytes(block[4:], 'big')
+            left = int.from_bytes(block[:8], 'big')
+            right = int.from_bytes(block[8:], 'big')
             
-            round_keys = self._key_stream(self.rounds * 4)
+            round_keys = self._key_stream(self.rounds * 8)
             
             for round_num in range(self.rounds):
-                round_key = round_keys[round_num*4:(round_num+1)*4]
+                round_key = round_keys[round_num*8:(round_num+1)*8]
                 temp = right
                 f_result = self._f_function(right, round_key)
                 right = left ^ f_result
                 left = temp
             
-            encrypted_block = left.to_bytes(4, 'big') + right.to_bytes(4, 'big')
+            encrypted_block = left.to_bytes(8, 'big') + right.to_bytes(8, 'big')
             encrypted_blocks.append(encrypted_block)
         
         return b''.join(encrypted_blocks)
@@ -303,25 +328,26 @@ class FeistelNetwork:
         decrypted_blocks = []
         
         for block in blocks:
-            left = int.from_bytes(block[:4], 'big')
-            right = int.from_bytes(block[4:], 'big')
+            left = int.from_bytes(block[:8], 'big')
+            right = int.from_bytes(block[8:], 'big')
             
-            round_keys = self._key_stream(self.rounds * 4)
+            round_keys = self._key_stream(self.rounds * 8)
             
             for round_num in range(self.rounds-1, -1, -1):
-                round_key = round_keys[round_num*4:(round_num+1)*4]
+                round_key = round_keys[round_num*8:(round_num+1)*8]
                 temp = left
                 f_result = self._f_function(left, round_key)
                 left = right ^ f_result
                 right = temp
             
-            decrypted_block = left.to_bytes(4, 'big') + right.to_bytes(4, 'big')
+            decrypted_block = left.to_bytes(8, 'big') + right.to_bytes(8, 'big')
             decrypted_blocks.append(decrypted_block)
         
-        return b''.join(decrypted_blocks)
+        result = b''.join(decrypted_blocks)
+        return result.rstrip(b'\x00')
 
 class SPN:
-    def __init__(self, key, rounds=4, block_size=16):
+    def __init__(self, key, rounds=10, block_size=16):
         self.key = key
         self.rounds = rounds
         self.block_size = block_size
@@ -372,7 +398,7 @@ class SPN:
         for byte in data:
             bits.extend([(byte >> i) & 1 for i in range(7, -1, -1)])
         
-        permuted_bits = bits[4:] + bits[:4]
+        permuted_bits = bits[32:] + bits[:32]
         
         result = bytearray()
         for i in range(0, len(permuted_bits), 8):
@@ -389,7 +415,7 @@ class SPN:
         for byte in data:
             bits.extend([(byte >> i) & 1 for i in range(7, -1, -1)])
         
-        inverse_permuted_bits = bits[-4:] + bits[:-4]
+        inverse_permuted_bits = bits[-32:] + bits[:-32]
         
         result = bytearray()
         for i in range(0, len(inverse_permuted_bits), 8):
@@ -461,143 +487,10 @@ class SPN:
             
             decrypted_blocks.append(current_state)
         
-        return b''.join(decrypted_blocks)
+        result = b''.join(decrypted_blocks)
+        return result.rstrip(b'\x00')
 
-# ==================== РЕЖИМЫ ШИФРОВАНИЯ ====================
-
-class CBCMode:
-    """Реализация режима CBC"""
-    
-    def __init__(self, cipher, iv=None):
-        self.cipher = cipher
-        self.block_size = 16
-        self.iv = iv or os.urandom(self.block_size)
-    
-    def encrypt(self, data):
-        data = PKCS7Padding.pad(data, self.block_size)
-        blocks = [data[i:i+self.block_size] for i in range(0, len(data), self.block_size)]
-        
-        encrypted_blocks = []
-        prev_block = self.iv
-        
-        for block in blocks:
-            xored = bytes([block[i] ^ prev_block[i] for i in range(self.block_size)])
-            encrypted_block = self.cipher.encrypt(xored)
-            encrypted_blocks.append(encrypted_block)
-            prev_block = encrypted_block
-        
-        return self.iv + b''.join(encrypted_blocks)
-    
-    def decrypt(self, encrypted_data):
-        iv = encrypted_data[:self.block_size]
-        encrypted_blocks = [encrypted_data[i:i+self.block_size] 
-                          for i in range(self.block_size, len(encrypted_data), self.block_size)]
-        
-        decrypted_blocks = []
-        prev_block = iv
-        
-        for block in encrypted_blocks:
-            decrypted_block = self.cipher.decrypt(block)
-            xored = bytes([decrypted_block[i] ^ prev_block[i] for i in range(self.block_size)])
-            decrypted_blocks.append(xored)
-            prev_block = block
-        
-        return PKCS7Padding.unpad(b''.join(decrypted_blocks))
-
-# ==================== АСИММЕТРИЧНОЕ ШИФРОВАНИЕ ====================
-
-class RSA:
-    """Реализация RSA шифрования"""
-    
-    def __init__(self, key_size=1024):
-        self.key_size = key_size
-        self.p = self.q = self.n = self.e = self.d = None
-    
-    def _is_prime(self, n, k=20):
-        if n < 2:
-            return False
-        if n in (2, 3):
-            return True
-        if n % 2 == 0:
-            return False
-        
-        r, d = 0, n - 1
-        while d % 2 == 0:
-            r += 1
-            d //= 2
-        
-        for _ in range(k):
-            a = random.randint(2, n - 2)
-            x = pow(a, d, n)
-            if x == 1 or x == n - 1:
-                continue
-            for _ in range(r - 1):
-                x = pow(x, 2, n)
-                if x == n - 1:
-                    break
-            else:
-                return False
-        return True
-    
-    def _generate_prime(self, bits):
-        while True:
-            p = random.getrandbits(bits)
-            p |= (1 << (bits - 1)) | 1
-            if self._is_prime(p):
-                return p
-    
-    def _mod_inverse(self, a, m):
-        def extended_gcd(a, b):
-            if b == 0:
-                return a, 1, 0
-            gcd, x1, y1 = extended_gcd(b, a % b)
-            x = y1
-            y = x1 - (a // b) * y1
-            return gcd, x, y
-        
-        gcd, x, _ = extended_gcd(a, m)
-        if gcd != 1:
-            raise ValueError("Обратный элемент не существует")
-        return x % m
-    
-    def generate_key_pair(self):
-        p_bits = self.key_size // 2
-        self.p = self._generate_prime(p_bits)
-        self.q = self._generate_prime(p_bits)
-        
-        self.n = self.p * self.q
-        phi = (self.p - 1) * (self.q - 1)
-        
-        self.e = 65537
-        while math.gcd(self.e, phi) != 1:
-            self.e += 2
-        
-        self.d = self._mod_inverse(self.e, phi)
-        
-        public_key = (self.n, self.e)
-        private_key = (self.n, self.d)
-        
-        return public_key, private_key
-    
-    def encrypt(self, message, public_key):
-        n, e = public_key
-        if isinstance(message, str):
-            message = message.encode()
-        
-        m = int.from_bytes(message, 'big')
-        if m >= n:
-            raise ValueError("Сообщение слишком большое")
-        
-        c = pow(m, e, n)
-        return c.to_bytes((c.bit_length() + 7) // 8, 'big')
-    
-    def decrypt(self, encrypted_data, private_key):
-        n, d = private_key
-        c = int.from_bytes(encrypted_data, 'big')
-        m = pow(c, d, n)
-        return m.to_bytes((m.bit_length() + 7) // 8, 'big').rstrip(b'\x00')
-
-# ==================== ЭЛЕКТРОННАЯ ПОДПИСЬ ====================
+# ==================== ЭЦП ====================
 
 class EllipticCurve:
     def __init__(self):
@@ -725,141 +618,243 @@ class DigitalSignature:
         y = int(key_str[64:], 16)
         return (x, y)
 
-# ==================== ГЛАВНОЕ МЕНЮ И ИНТЕРФЕЙС ====================
+# ==================== ИНТЕРАКТИВНЫЙ ИНТЕРФЕЙС ====================
 
-def main_menu():
-    """Главное меню криптографической системы"""
+def cipher_menu(cipher_class, cipher_name, supports_modes=True):
+    """Меню для работы с конкретным шифром"""
     
-    while True:
-        print("\n" + "="*60)
-        print("🎯 КОМПЛЕКСНАЯ КРИПТОГРАФИЧЕСКАЯ СИСТЕМА")
-        print("="*60)
-        print("1. 🔐 СИММЕТРИЧНОЕ ШИФРОВАНИЕ")
-        print("   ├─ Поточные шифры")
-        print("   ├─ Блочные шифры") 
-        print("   └─ Режимы шифрования")
-        print("2. 🔑 АСИММЕТРИЧНОЕ ШИФРОВАНИЕ (RSA)")
-        print("3. 📝 ЭЛЕКТРОННАЯ ПОДПИСЬ (ЭЦП)")
-        print("4. #️⃣ ХЕШ-ФУНКЦИИ")
-        print("5. 🧪 ТЕСТИРОВАНИЕ ВСЕХ АЛГОРИТМОВ")
-        print("6. 🚪 ВЫХОД")
+    print(f"\n--- {cipher_name.upper()} ---")
+    
+    # Выбор режима для блочных шифров
+    mode = None
+    mode_name = ""
+    
+    if supports_modes:
+        print("\n📊 Выберите режим шифрования:")
+        print("1. Базовый (без режима)")
+        print("2. CBC (Cipher Block Chaining)")
+        print("3. CTR (Counter)")
         
-        choice = input("\n📋 Выберите категорию (1-6): ").strip()
+        mode_choice = input("Ваш выбор (1-3): ").strip()
         
-        if choice == '1':
-            symmetric_menu()
-        elif choice == '2':
-            asymmetric_menu()
-        elif choice == '3':
-            digital_signature_menu()
-        elif choice == '4':
-            hash_menu()
-        elif choice == '5':
-            test_all_algorithms()
-        elif choice == '6':
-            print("👋 Выход из программы...")
-            break
+        if mode_choice == '2':
+            mode = CBCMode
+            mode_name = " + CBC"
+        elif mode_choice == '3':
+            mode = CTRMode
+            mode_name = " + CTR"
         else:
-            print("❌ Неверный выбор!")
+            mode_name = " (базовый)"
+    
+    # Ввод параметров
+    key = input("Введите ключ: ").encode()
+    if not key:
+        print("❌ Ключ не может быть пустым!")
+        return
+    
+    # НАСТРОЙКА ПАРАМЕТРОВ ШИФРА
+    base_cipher = None
+    
+    if cipher_class == StreamCipher:
+        base_cipher = StreamCipher(key)
+        full_name = f"Поточный шифр{mode_name}"
+    
+    elif cipher_class == FeistelNetwork:
+        rounds = int(input("Количество раундов (по умолчанию 16): ") or 16)
+        base_cipher = FeistelNetwork(key, rounds)
+        full_name = f"Сеть Фейстеля ({rounds} раундов){mode_name}"
+    
+    elif cipher_class == SPN:
+        rounds = int(input("Количество раундов (по умолчанию 10): ") or 10)
+        base_cipher = SPN(key, rounds)
+        full_name = f"SPN ({rounds} раундов){mode_name}"
+    
+    else:
+        print("❌ Неизвестный класс шифра!")
+        return
+    
+    # Создание шифра с режимом (для блочных шифров)
+    if supports_modes and mode:
+        cipher = mode(base_cipher)
+    else:
+        cipher = base_cipher
+    
+    # Выбор операции
+    operation = input("Шифровать (e) или дешифровать (d)? ").strip().lower()
+    
+    if operation == 'e':
+        message = input("Введите сообщение для шифрования: ")
+        if not message:
+            print("❌ Сообщение не может быть пустым!")
+            return
+        
+        try:
+            encrypted = cipher.encrypt(message)
+            print(f"\n✅ Зашифровано с помощью {full_name}")
+            print(f"📊 Зашифрованные данные (hex): {encrypted.hex()}")
+            print(f"📏 Размер: {len(encrypted)} байт")
+            
+            # Для режимов с IV/nonce показываем их
+            if hasattr(cipher, 'iv') and cipher.iv:
+                print(f"🔑 IV: {cipher.iv.hex()}")
+            elif hasattr(cipher, 'nonce') and cipher.nonce:
+                print(f"🔑 Nonce: {cipher.nonce.hex()}")
+                
+        except Exception as e:
+            print(f"❌ Ошибка шифрования: {e}")
+    
+    elif operation == 'd':
+        hex_data = input("Введите зашифрованные данные в hex: ").strip()
+        if not hex_data:
+            print("❌ Данные не могут быть пустыми!")
+            return
+        
+        try:
+            encrypted = bytes.fromhex(hex_data)
+            decrypted = cipher.decrypt(encrypted)
+            print(f"\n✅ Расшифровано с помощью {full_name}")
+            print(f"📝 Сообщение: {decrypted.decode(errors='replace')}")
+            
+        except ValueError:
+            print("❌ Неверный hex формат!")
+        except Exception as e:
+            print(f"❌ Ошибка дешифрования: {e}")
+    
+    else:
+        print("❌ Неверный выбор операции!")
 
-def symmetric_menu():
-    """Меню симметричного шифрования"""
+def hash_menu():
+    """Меню для работы с хеш-функциями"""
+    
+    sha = SHA256()
+    
     while True:
         print("\n" + "="*50)
-        print("🔐 СИММЕТРИЧНОЕ ШИФРОВАНИЕ")
+        print("#️⃣ ХЕШ-ФУНКЦИИ")
         print("="*50)
-        print("1. 📊 Поточные шифры")
-        print("2. 🧱 Блочные шифры")
-        print("3. 🔄 Режим CBC")
-        print("4. ↩️ Назад")
+        print("1. 🧮 Вычислить хеш SHA-256")
+        print("2. 🔍 Сравнить с встроенным hashlib.sha256")
+        print("3. ↩️ Назад")
         
-        choice = input("\nВыберите тип (1-4): ").strip()
+        choice = input("\nВыберите действие (1-3): ").strip()
         
-        if choice == '1':
-            stream_cipher_menu()
-        elif choice == '2':
-            block_cipher_menu()
-        elif choice == '3':
-            cbc_mode_menu()
-        elif choice == '4':
+        if choice == '3':
             break
-        else:
-            print("❌ Неверный выбор!")
+        elif choice == '1':
+            data = input("Введите данные для хеширования: ")
+            custom_hash = sha.hexdigest(data)
+            builtin_hash = hashlib.sha256(data.encode()).hexdigest()
+            
+            print(f"\n🔢 Реализация SHA-256: {custom_hash}")
+            print(f"🔢 Встроенный SHA-256:  {builtin_hash}")
+            print(f"✅ Совпадение: {custom_hash == builtin_hash}")
+            
+        elif choice == '2':
+            test_vectors = [
+                "",
+                "abc", 
+                "Hello, World!",
+                "SHA-256 test",
+                "a" * 100,
+                "Тест на русском"
+            ]
+            
+            print("\n🔍 Сравнение с тестовыми векторами:")
+            print("=" * 60)
+            
+            all_match = True
+            for test in test_vectors:
+                sha_custom = SHA256()
+                custom = sha_custom.hexdigest(test)
+                builtin = hashlib.sha256(test.encode()).hexdigest()
+                match = custom == builtin
+                status = "✅" if match else "❌"
+                
+                print(f"{status} '{test[:20]}{'...' if len(test) > 20 else ''}'")
+                if not match:
+                    print(f"  Custom:  {custom}")
+                    print(f"  Builtin: {builtin}")
+                    all_match = False
+            
+            if all_match:
+                print("\n🎉 Все тесты пройдены успешно!")
+            else:
+                print("\n⚠️  Некоторые тесты не прошли проверку")
 
-def stream_cipher_menu():
-    """Меню поточных шифров"""
-    print("\n--- 📊 ПОТОЧНЫЕ ШИФРЫ ---")
-    mode = input("Шифровать (e) или дешифровать (d)? ").strip().lower()
-    key = input("Введите ключ: ").encode()
+def digital_signature_menu():
+    """Меню электронной подписи"""
     
-    print("\nВыберите алгоритм:")
-    print("1. StreamCipher (на основе хеша)")
-    print("2. LFSR (регистр сдвига)")
+    dsa = DigitalSignature()
+    private_key = None
+    public_key = None
     
-    algo_choice = input("Ваш выбор (1-2): ").strip()
-    
-    if algo_choice == '1':
-        cipher = StreamCipher(key)
-        algo_name = "StreamCipher"
-    elif algo_choice == '2':
-        cipher = LFSRCipher(key)
-        algo_name = "LFSR"
-    else:
-        print("❌ Неверный выбор!")
-        return
-    
-    if mode == 'e':
-        message = input("Введите сообщение: ")
-        encrypted = cipher.encrypt(message)
-        print(f"\n✅ Зашифровано с помощью {algo_name}:")
-        print(f"HEX: {encrypted.hex()}")
-        print(f"Размер: {len(encrypted)} байт")
+    while True:
+        print("\n" + "="*50)
+        print("📝 ЭЛЕКТРОННАЯ ПОДПИСЬ (ECDSA)")
+        print("="*50)
+        print("1. 🔑 Сгенерировать пару ключей")
+        print("2. ✍️ Подписать сообщение")
+        print("3. ✅ Проверить подпись")
+        print("4. 💾 Экспорт/импорт ключей")
+        print("5. ↩️ Назад")
         
-    elif mode == 'd':
-        hex_data = input("Введите HEX данные: ").strip()
-        try:
-            encrypted = bytes.fromhex(hex_data)
-            decrypted = cipher.decrypt(encrypted)
-            print(f"\n✅ Расшифровано с помощью {algo_name}:")
-            print(f"Текст: {decrypted.decode(errors='replace')}")
-        except Exception as e:
-            print(f"❌ Ошибка: {e}")
-
-def block_cipher_menu():
-    """Меню блочных шифров"""
-    print("\n--- 🧱 БЛОЧНЫЕ ШИФРЫ ---")
-    mode = input("Шифровать (e) или дешифровать (d)? ").strip().lower()
-    key = input("Введите ключ: ").encode()
-    
-    print("\nВыберите алгоритм:")
-    print("1. SPN (Substitution-Permutation Network)")
-    print("2. Сеть Фейстеля")
-    
-    algo_choice = input("Ваш выбор (1-2): ").strip()
-    
-    if algo_choice == '1':
-        rounds = int(input("Количество раундов (по умолчанию 4): ") or "4")
-        cipher = SPN(key, rounds)
-        algo_name = f"SPN ({rounds} раундов)"
-    elif algo_choice == '2':
-        rounds = int(input("Количество раундов (по умолчанию 16): ") or "16")
-        cipher = FeistelNetwork(key, rounds)
-        algo_name = f"Фейстель ({rounds} раундов)"
-    else:
-        print("❌ Неверный выбор!")
-        return
-    
-    if mode == 'e':
-        message = input("Введите сообщение: ")
-        encrypted = cipher.encrypt(message)
-        print(f"\n✅ Зашифровано с помощью {algo_name}:")
-        print(f"HEX: {encrypted.hex()}")
-        print(f"Размер: {len(encrypted)} байт")
+        choice = input("\nВыберите действие (1-5): ").strip()
         
-    elif mode == 'd':
-        hex_data = input("Введите HEX данные: ").strip()
-        try:
-            encrypted = bytes.fromhex(hex_data)
-            decrypted = cipher.decrypt(encrypted)
-            # Убираем паддинг для блочных шифров
-            decrypted_clean = decrypted
+        if choice == '5':
+            break
+        elif choice == '1':
+            private_key, public_key = dsa.generate_key_pair()
+            print(f"\n✅ Пара ключей сгенерирована!")
+            print(f"🔐 Приватный ключ: {private_key:064x}")
+            print(f"🔑 Публичный ключ: {dsa.public_key_to_string(public_key)}")
+            
+        elif choice == '2':
+            if private_key is None:
+                print("❌ Сначала сгенерируйте пару ключей!")
+                continue
+                
+            message = input("Введите сообщение для подписи: ")
+            signature = dsa.sign(message, private_key)
+            signature_str = dsa.signature_to_string(signature)
+            
+            print(f"\n✅ Сообщение подписано!")
+            print(f"📝 Сообщение: '{message}'")
+            print(f"🖊️ Подпись: {signature_str}")
+            
+            # Проверяем подпись для демонстрации
+            is_valid = dsa.verify(message, signature, public_key)
+            print(f"🔍 Проверка подписи: {'✅ ВАЛИДНА' if is_valid else '❌ НЕВАЛИДНА'}")
+            
+        elif choice == '3':
+            if public_key is None:
+                print("❌ Сначала сгенерируйте или импортируйте публичный ключ!")
+                continue
+                
+            message = input("Введите сообщение для проверки: ")
+            signature_str = input("Введите подпись (hex): ").strip()
+            
+            try:
+                signature = dsa.string_to_signature(signature_str)
+                is_valid = dsa.verify(message, signature, public_key)
+                
+                print(f"\n🔍 Результат проверки: {'✅ ПОДПИСЬ ВАЛИДНА' if is_valid else '❌ ПОДПИСЬ НЕВАЛИДНА'}")
+                print(f"📝 Сообщение: '{message}'")
+                print(f"🔑 Публичный ключ: {dsa.public_key_to_string(public_key)[:32]}...")
+                
+            except Exception as e:
+                print(f"❌ Ошибка при проверке подписи: {e}")
+                
+        elif choice == '4':
+            print("\n1. Экспортировать ключи")
+            print("2. Импортировать публичный ключ")
+            print("3. Импортировать приватный ключ")
+            
+            sub_choice = input("Выберите действие (1-3): ").strip()
+            
+            if sub_choice == '1':
+                if private_key is None or public_key is None:
+                    print("❌ Сначала сгенерируйте пару ключей!")
+                    continue
+                    
+                print(f"\n🔐 Приватный ключ: {private_key:064x}")
+                print(f"🔑 Публичный ключ: {dsa.public_key_to
