@@ -1,33 +1,103 @@
 import hashlib
 
 
-class CBCMode:
-    """Реализация режима CBC для 128-битных блоков"""
+class FeistelNetwork:
+    def __init__(self, key, rounds=16):
+        self.key = key
+        self.rounds = rounds
+        self.position = 0
+        self.block_size = 16  # 128 бит = 16 байт
 
-    def __init__(self, cipher, iv=None):
-        self.cipher = cipher
-        self.block_size = 16  # 128 бит
-        self.iv = iv or os.urandom(self.block_size)
+    def _reset_position(self):
+        self.position = 0
+
+    def _key_stream(self, length):
+        result = b''
+        while len(result) < length:
+            data = self.key + str(self.position).encode()
+            hash_val = hashlib.sha256(data).digest()
+            result += hash_val
+            self.position += 1
+        return result[:length]
+
+    def _f_function(self, right_block, round_key):
+        """F-функция для правой половины блока (8 байт)"""
+        block_bytes = right_block.to_bytes(8, 'big')  # 8 байт вместо 4
+        
+        # XOR с ключом раунда и хешируем
+        mixed = bytes([block_bytes[i] ^ round_key[i % len(round_key)] for i in range(len(block_bytes))])
+        result = hashlib.sha256(mixed).digest()
+        
+        # Возвращаем первые 8 байт как int
+        return int.from_bytes(result[:8], 'big')
+
+    def _split_blocks(self, data):
+        """Разделяем данные на блоки по 16 байт (128 бит)"""
+        blocks = []
+        for i in range(0, len(data), self.block_size):
+            block = data[i:i + self.block_size]
+            # Дополняем последний блок если нужно
+            if len(block) < self.block_size:
+                block = block + b'\x00' * (self.block_size - len(block))
+            blocks.append(block)
+        return blocks
 
     def encrypt(self, data):
-        # Дополняем данные до размера блока
-        padding_length = self.block_size - (len(data) % self.block_size)
-        if padding_length == 0:
-            padding_length = self.block_size
-        data = data + bytes([padding_length] * padding_length)
-
-        blocks = [data[i:i + self.block_size] for i in range(0, len(data), self.block_size)]
-
+        if isinstance(data, str):
+            data = data.encode()
+            
+        self._reset_position()
+        blocks = self._split_blocks(data)
         encrypted_blocks = []
-        prev_block = self.iv
-
+        
         for block in blocks:
-            xored = bytes([block[i] ^ prev_block[i] for i in range(self.block_size)])
-            encrypted_block = self.cipher.encrypt(xored)
+            # Разделяем блок на две части по 8 байт каждая
+            left = int.from_bytes(block[:8], 'big')    # 8 байт
+            right = int.from_bytes(block[8:], 'big')   # 8 байт
+            
+            # Генерируем ключи для всех раундов (8 байт на раунд)
+            round_keys = self._key_stream(self.rounds * 8)
+            
+            # Выполняем раунды Фейстеля
+            for round_num in range(self.rounds):
+                round_key = round_keys[round_num*8:(round_num+1)*8]
+                
+                temp = right
+                f_result = self._f_function(right, round_key)
+                right = left ^ f_result
+                left = temp
+            
+            # Объединяем финальные блоки
+            encrypted_block = left.to_bytes(8, 'big') + right.to_bytes(8, 'big')
             encrypted_blocks.append(encrypted_block)
-            prev_block = encrypted_block
+        
+        return b''.join(encrypted_blocks)
 
-        return self.iv + b''.join(encrypted_blocks)
+    def decrypt(self, encrypted_data):
+        self._reset_position()
+        blocks = self._split_blocks(encrypted_data)
+        decrypted_blocks = []
+        
+        for block in blocks:
+            left = int.from_bytes(block[:8], 'big')
+            right = int.from_bytes(block[8:], 'big')
+            
+            round_keys = self._key_stream(self.rounds * 8)
+            
+            for round_num in range(self.rounds-1, -1, -1):
+                round_key = round_keys[round_num*8:(round_num+1)*8]
+                
+                temp = left
+                f_result = self._f_function(left, round_key)
+                left = right ^ f_result
+                right = temp
+            
+            decrypted_block = left.to_bytes(8, 'big') + right.to_bytes(8, 'big')
+            decrypted_blocks.append(decrypted_block)
+        
+        result = b''.join(decrypted_blocks)
+        # Убираем дополняющие нули
+        return result.rstrip(b'\x00')
 
     def decrypt(self, encrypted_data):
         iv = encrypted_data[:self.block_size]
